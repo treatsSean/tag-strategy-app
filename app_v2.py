@@ -11,24 +11,13 @@ SCOPE_OPTIONS = ["catalog", "schema", "table", "view", "column"]
 SCOPE_COLS = [f"scope_{s}" for s in SCOPE_OPTIONS]
 CREATE_OPTIONS = ["Central governance", "Domain leads", "Team leads", "Anyone"]
 ASSIGN_OPTIONS = [
-    "Governance team only",
-    "Service principals / admins",
-    "Stewards / service principals",
-    "Automation / stewards",
-    "Governance team / owners",
-    "Team leads / finance ops",
-    "Practitioners / team leads",
-    "Practitioners",
-    "Anyone",
+    "Governance team only", "Service principals / admins", "Stewards / service principals",
+    "Automation / stewards", "Governance team / owners", "Team leads / finance ops",
+    "Practitioners / team leads", "Practitioners", "Anyone",
 ]
 AUTOMATION_OPTIONS = [
-    "None",
-    "Manual",
-    "Manual + propagation",
-    "Audit & review candidates",
-    "AMM surfaces candidates",
-    "Auto-detect candidates",
-    "Auto-assign (no review)",
+    "None", "Manual", "Manual + propagation", "Audit & review candidates",
+    "AMM surfaces candidates", "Auto-detect candidates", "Auto-assign (no review)",
     "Propagation only",
 ]
 
@@ -68,17 +57,9 @@ def _with_row_ids(df):
 
 def _blank_row():
     row = {
-        "category": "New category",
-        "desc": "",
-        "type": "governed",
-        "key": "",
-        "values": "",
-        **_scope_flags("table"),
-        "creates": "Central governance",
-        "assigns": "Practitioners",
-        "automation": "Manual",
-        "owner": "",
-        "row_id": st.session_state.next_row_id,
+        "category": "New category", "desc": "", "type": "governed", "key": "", "values": "",
+        **_scope_flags("table"), "creates": "Central governance", "assigns": "Practitioners",
+        "automation": "Manual", "owner": "", "row_id": st.session_state.next_row_id,
     }
     st.session_state.next_row_id += 1
     return row
@@ -154,6 +135,64 @@ st.markdown(f"""
     border-radius: 6px;
     margin-top: 12px;
     font-size: 12px;
+  }}
+
+  /* ── Layout density fixes ─────────────────────────────────────── */
+  .block-container {{
+    padding-top: 1.75rem !important;
+    padding-bottom: 2.5rem !important;
+  }}
+
+  .db-title-row {{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 12px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(27, 36, 49, 0.12);
+  }}
+  .db-title-row .db-title-icon {{ font-size: 26px; line-height: 1; }}
+  .db-title-row .db-title-text {{ font-size: 20px; font-weight: 700; color: #1B2431; line-height: 1.25; }}
+  .db-title-row .db-title-caption {{ font-size: 12.5px; color: #667085; margin-top: 2px; }}
+
+  .db-sidebar-brand {{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid rgba(249, 249, 249, 0.18);
+  }}
+  .db-sidebar-brand .db-sidebar-icon {{ font-size: 18px; }}
+  .db-sidebar-brand .db-sidebar-name {{ font-size: 13.5px; font-weight: 700; letter-spacing: 0.02em; }}
+
+  [data-testid="stSidebar"] .block-container {{
+    padding-top: 1.25rem !important;
+  }}
+  [data-testid="stSidebar"] h5 {{
+    margin-top: 0.2rem !important;
+    margin-bottom: 0.3rem !important;
+    font-size: 0.82rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    opacity: 0.85;
+  }}
+  [data-testid="stSidebar"] hr {{
+    margin: 0.6rem 0 !important;
+  }}
+  [data-testid="stSidebar"] [data-testid="stAlert"] {{
+    padding: 0.45rem 0.6rem !important;
+    font-size: 12.5px !important;
+  }}
+  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{
+    gap: 0.5rem;
+  }}
+
+  button[data-baseweb="tab"] {{
+    padding: 6px 16px !important;
+  }}
+  [data-testid="stTabs"] {{
+    margin-top: 0.25rem !important;
   }}
 </style>
 """, unsafe_allow_html=True)
@@ -401,35 +440,43 @@ def generate_tf(catalog="", schema="", table=""):
     return "\n".join(lines)
 
 
-col_logo, col_title = st.columns([1, 11])
-with col_logo:
-    st.markdown("### 🏷️")
-with col_title:
-    st.markdown("## Unity Catalog · Tag Strategy Builder")
-    st.caption("Design your governed tag taxonomy, then export SQL or Terraform — or apply tags directly to your workspace.")
-
-st.divider()
+st.markdown(
+    """
+    <div class="db-title-row">
+      <div class="db-title-icon">🏷️</div>
+      <div>
+        <div class="db-title-text">Unity Catalog · Tag Strategy Builder</div>
+        <div class="db-title-caption">Design your governed tag taxonomy, then export SQL or Terraform — or apply tags directly to your workspace.</div>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
-    st.markdown("### 🎨 Appearance")
-    st.radio("Theme", ["Dark Header", "Light"], key="theme_mode", horizontal=True)
-    st.markdown("---")
+    st.markdown(
+        """
+        <div class="db-sidebar-brand">
+          <div class="db-sidebar-icon">🏷️</div>
+          <div class="db-sidebar-name">TAG STRATEGY BUILDER</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.markdown("### 🔌 Workspace")
     w, conn_err = get_workspace_client()
     if conn_err:
-        st.error(f"Not connected — running in preview mode.\n\n`{conn_err}`")
+        st.error("Not connected — preview mode", icon="🔌")
         w = None
     else:
         try:
             me = w.current_user.me()
-            st.success(f"Connected as **{me.display_name or me.user_name}**")
+            st.caption(f"🔌 Connected as **{me.display_name or me.user_name}**")
         except Exception:
-            st.warning("Connected (user info unavailable)")
+            st.caption("🔌 Connected")
 
-    st.markdown("---")
-    st.markdown("### 🎯 Target Object")
-    st.caption("Used to populate SQL and Terraform exports, and to apply tags directly.")
+    st.markdown("##### 🎯 Target object")
+    st.caption("Populates SQL, Terraform, and Apply tabs.")
     catalogs = list_catalogs(w) if w else []
     catalog_input = st.selectbox("Catalog", [""] + catalogs, key="sb_catalog") if catalogs else st.text_input("Catalog name", key="sb_catalog")
     st.session_state.target_catalog = catalog_input or ""
@@ -440,8 +487,7 @@ with st.sidebar:
     table_input = st.selectbox("Table", [""] + tables, key="sb_table") if tables else st.text_input("Table name", key="sb_table")
     st.session_state.target_table = table_input or ""
 
-    st.markdown("---")
-    st.markdown("### 📊 Strategy completeness")
+    st.markdown("##### 📊 Completeness")
     gov_rows = st.session_state.tag_rows[st.session_state.tag_rows["type"] == "governed"]
     if len(gov_rows):
         filled = (
@@ -459,6 +505,9 @@ with st.sidebar:
     if st.button("↺ Reset to defaults", use_container_width=True):
         st.session_state.tag_rows = _with_row_ids(pd.DataFrame(DEFAULT_ROWS, columns=COLUMNS))
         st.rerun()
+
+    st.divider()
+    st.radio("Theme", ["Dark Header", "Light"], key="theme_mode", horizontal=True)
 
 
 tab_help, tab_matrix, tab_sql, tab_tf, tab_apply = st.tabs([

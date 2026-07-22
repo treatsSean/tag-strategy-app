@@ -301,7 +301,7 @@ def generate_sql(catalog="", schema="", table=""):
     tbl_rows = [r for _, r in _governed_rows().iterrows() if any(s in _scopes(r) for s in ["table", "view"])]
     if tbl_rows:
         parts = [f"  '{r['key']}' = '{(_vals(r)[0] if _vals(r) else '<value>')}'  -- {r['category']}" for r in tbl_rows]
-        lines += ["-- ── STEP 4: Apply table/view-level tags ───────────────────", f"ALTER TABLE {tbl}", "SET TAGS (\n" + ",\n".join(parts) + "\n);", ""]
+        lines += ["-- ── STEP 4: Apply table/view-level tags ──────────────────", f"ALTER TABLE {tbl}", "SET TAGS (\n" + ",\n".join(parts) + "\n);", ""]
     col_rows = [r for _, r in _governed_rows().iterrows() if "column" in _scopes(r)]
     if col_rows:
         lines += [
@@ -554,7 +554,8 @@ with tab_matrix:
         st.info("No tag rows match the current filters.")
     else:
         for group_name, row_indexes in grouped_rows.items():
-            with st.expander(f"{group_name} ({len(row_indexes)})", expanded=True):
+            st.markdown(f"**{group_name}** &nbsp;·&nbsp; {len(row_indexes)} tag(s)")
+            with st.container(border=True):
                 for idx in row_indexes:
                     row = matrix_df.loc[idx].copy()
                     row_id = int(row.get("row_id", idx + 1))

@@ -234,10 +234,69 @@ COL_LABELS = {
     "creates": "Who Creates", "assigns": "Who Assigns",
     "automation": "Automation", "owner": "Owner / DRI",
 }
+CREATE_OPTIONS = ["Central governance", "Domain leads", "Team leads", "Anyone"]
+ASSIGN_OPTIONS = [
+    "Governance team only", "Service principals / admins", "Stewards / service principals",
+    "Automation / stewards", "Governance team / owners", "Team leads / finance ops",
+    "Practitioners / team leads", "Practitioners", "Anyone",
+]
+AUTOMATION_OPTIONS = [
+    "None", "Manual", "Manual + propagation", "Audit & review candidates",
+    "AMM surfaces candidates", "Auto-detect candidates", "Auto-assign (no review)",
+    "Propagation only",
+]
+
+
+def _with_row_ids(df):
+    df = df.copy()
+    if "row_id" not in df.columns:
+        start = st.session_state.next_row_id
+        df["row_id"] = list(range(start, start + len(df)))
+        st.session_state.next_row_id = start + len(df)
+    return df
+
+
+def _blank_row():
+    row = {
+        "category": "New category",
+        "desc": "",
+        "type": "governed",
+        "key": "",
+        "values": "",
+        **_scope_flags("table"),
+        "creates": "Central governance",
+        "assigns": "Practitioners",
+        "automation": "Manual",
+        "owner": "",
+        "row_id": st.session_state.next_row_id,
+    }
+    st.session_state.next_row_id += 1
+    return row
+
+
+def _row_scope_label(row):
+    return ", ".join(_scopes(row)) or "No scope selected"
+
+
+def _row_completion(row):
+    if str(row.get("type", "")).strip() != "governed":
+        return 1.0
+    checks = [
+        bool(str(row.get("key", "")).strip()),
+        bool(str(row.get("values", "")).strip()),
+        bool(_scopes(row)),
+        bool(str(row.get("owner", "")).strip()),
+    ]
+    return sum(checks) / len(checks)
+
 
 # ── Session state ──────────────────────────────────────────────────────────────
+if "next_row_id" not in st.session_state:
+    st.session_state.next_row_id = 1
 if "tag_rows" not in st.session_state:
-    st.session_state.tag_rows = pd.DataFrame(DEFAULT_ROWS, columns=COLUMNS)
+    st.session_state.tag_rows = _with_row_ids(pd.DataFrame(DEFAULT_ROWS, columns=COLUMNS))
+else:
+    st.session_state.tag_rows = _with_row_ids(st.session_state.tag_rows)
 
 if "target_catalog" not in st.session_state:
     st.session_state.target_catalog = ""
@@ -309,7 +368,7 @@ with st.sidebar:
         st.progress(0.0, text="No governed rows")
 
     if st.button("↺ Reset to defaults", use_container_width=True):
-        st.session_state.tag_rows = pd.DataFrame(DEFAULT_ROWS, columns=COLUMNS)
+        st.session_state.tag_rows = _with_row_ids(pd.DataFrame(DEFAULT_ROWS, columns=COLUMNS))
         st.rerun()
 
 
@@ -348,12 +407,12 @@ with tab_help:
         "you're designing for. These selections populate the generated SQL, Terraform, and the "
         "Apply tab. The **Strategy completeness** meter tracks how many governed rows have a "
         "key, allowed values, scope, and owner filled in.\n"
-        "3. **📋 Tag Matrix** — edit the taxonomy directly in the table. Add or delete rows, "
-        "tick the scope checkboxes (catalog/schema/table/view/column) for each tag, and pick "
-        "*Who Creates*, *Who Assigns*, and *Automation* from their dropdowns. Expand "
-        "**Preview — key:value pairs per row** below the table to see any row's fields "
-        "reconstructed as a plain key:value block. Use **↺ Reset to defaults** (sidebar) to "
-        "start over from the built-in taxonomy.\n"
+        "3. **📋 Tag Matrix** — review the taxonomy as grouped, expandable tag cards instead of "
+        "one wide spreadsheet. Filter the list, open a tag row to edit it, tick the scope "
+        "checkboxes (catalog/schema/table/view/column), and pick *Who Creates*, *Who Assigns*, "
+        "and *Automation* from their dropdowns. Each row includes its own live key:value preview, "
+        "plus duplicate/delete actions. Use **↺ Reset to defaults** (sidebar) to start over from "
+        "the built-in taxonomy.\n"
         "4. **⚡ SQL — Apply Tags** — copy or download a full `ALTER ... SET TAGS` script scoped "
         "to your target object, plus verification queries against `information_schema`.\n"
         "5. **🏗 Terraform HCL** — copy or download equivalent `databricks_catalog` / "
@@ -386,82 +445,201 @@ with tab_help:
 with tab_matrix:
     st.markdown("#### Tag taxonomy")
     st.caption(
-        "Edit keys, define allowed values, and set scope + ownership. "
-        "Governed rows (with a defined key) drive the SQL and Terraform exports."
+        "Edit keys, scope, ownership, and operating model in grouped tag cards. "
+        "Governed rows with defined keys drive the SQL and Terraform exports."
     )
 
     col_info, col_warn = st.columns([3, 2])
     with col_info:
         st.info(
-            "**Governed tags** must be created via Catalog Explorer or the REST API before assignment. "
-            "**Ungoverned** tags can be assigned freely — no pre-definition needed.",
+            "**Governed tags** should be standardized and centrally controlled. "
+            "**Ungoverned tags** are flexible for practitioner-defined annotations.",
             icon="💡"
         )
     with col_warn:
         missing_vals = gov_rows[gov_rows["values"] == ""]
         if not missing_vals.empty:
             st.warning(
-                f"⚠ {len(missing_vals)} governed tag(s) have no allowed values defined: "
-                f"{', '.join(missing_vals['key'].tolist())}",
+                f"{len(missing_vals)} governed tag(s) are missing allowed values.",
                 icon="⚠️"
             )
 
-    # Editable dataframe
-    edited = st.data_editor(
-        st.session_state.tag_rows,
-        use_container_width=True,
-        num_rows="dynamic",
-        column_config={
-            "category":   st.column_config.TextColumn("Category", width="medium"),
-            "desc":       st.column_config.TextColumn("Description", width="large"),
-            "type":       st.column_config.SelectboxColumn("Governance", options=["governed", "ungoverned"], width="small"),
-            "key":        st.column_config.TextColumn("Tag Key (snake_case)", width="medium"),
-            "values":     st.column_config.TextColumn("Allowed Values (comma-sep)", width="large"),
-            "scope_catalog": st.column_config.CheckboxColumn("Catalog", width="small"),
-            "scope_schema":  st.column_config.CheckboxColumn("Schema", width="small"),
-            "scope_table":   st.column_config.CheckboxColumn("Table", width="small"),
-            "scope_view":    st.column_config.CheckboxColumn("View", width="small"),
-            "scope_column":  st.column_config.CheckboxColumn("Column", width="small"),
-            "creates":    st.column_config.SelectboxColumn("Who Creates",
-                            options=["Central governance", "Domain leads", "Team leads", "Anyone"], width="medium"),
-            "assigns":    st.column_config.SelectboxColumn("Who Assigns",
-                            options=["Governance team only", "Service principals / admins",
-                                     "Stewards / service principals", "Automation / stewards",
-                                     "Governance team / owners", "Team leads / finance ops",
-                                     "Practitioners / team leads", "Practitioners", "Anyone"],
-                            width="medium"),
-            "automation": st.column_config.SelectboxColumn("Automation",
-                            options=["None", "Manual", "Manual + propagation",
-                                     "Audit & review candidates", "AMM surfaces candidates",
-                                     "Auto-detect candidates", "Auto-assign (no review)", "Propagation only"],
-                            width="medium"),
-            "owner":      st.column_config.TextColumn("Owner / DRI", width="medium"),
-        },
-        hide_index=True,
-        key="matrix_editor",
-    )
-    st.session_state.tag_rows = edited
+    matrix_df = st.session_state.tag_rows.copy()
+    total_rows = len(matrix_df)
+    governed_count = int((matrix_df["type"] == "governed").sum())
+    incomplete_count = int(((matrix_df["type"] == "governed") & (matrix_df.apply(_row_completion, axis=1) < 1)).sum())
+    scoped_count = int(matrix_df[SCOPE_COLS].any(axis=1).sum())
 
-    st.markdown("---")
-    st.markdown("#### Preview — key:value pairs per row")
-    st.caption("Each row's fields reconstructed as key:value pairs, reflecting the latest matrix edits.")
-    for i, row in st.session_state.tag_rows.reset_index(drop=True).iterrows():
-        label = row.get("key") or row.get("category") or f"Row {i + 1}"
-        with st.expander(f"`{label}`" if row.get("key") else str(label)):
-            scope_str = ", ".join(s for s in SCOPE_OPTIONS if row.get(f"scope_{s}")) or "—"
-            preview = {
-                "category": row.get("category", ""),
-                "description": row.get("desc", ""),
-                "governance": row.get("type", ""),
-                "tag_key": row.get("key", ""),
-                "allowed_values": row.get("values", ""),
-                "scope": scope_str,
-                "who_creates": row.get("creates", ""),
-                "who_assigns": row.get("assigns", ""),
-                "automation": row.get("automation", ""),
-                "owner": row.get("owner", ""),
-            }
-            st.code("\n".join(f"{k}: {v}" for k, v in preview.items()), language="yaml")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Tag rows", total_rows)
+    m2.metric("Governed", governed_count)
+    m3.metric("Need attention", incomplete_count)
+    m4.metric("With scope", scoped_count)
+
+    tool_left, tool_mid, tool_right = st.columns([2, 1, 1])
+    with tool_left:
+        matrix_search = st.text_input(
+            "Search tag rows",
+            value=st.session_state.get("matrix_search", ""),
+            key="matrix_search",
+            placeholder="Search category, key, description, or owner",
+        )
+    with tool_mid:
+        category_options = ["All categories"] + sorted({str(v).strip() for v in matrix_df["category"].fillna("") if str(v).strip()})
+        matrix_category = st.selectbox("Category", category_options, key="matrix_category")
+    with tool_right:
+        matrix_type = st.selectbox("Governance", ["All", "governed", "ungoverned"], key="matrix_type")
+
+    action_left, action_right = st.columns([1, 4])
+    with action_left:
+        if st.button("+ Add tag row", type="primary", use_container_width=True):
+            st.session_state.tag_rows = pd.concat(
+                [st.session_state.tag_rows, pd.DataFrame([_blank_row()])],
+                ignore_index=True,
+            )
+            st.rerun()
+    with action_right:
+        st.caption("Open a tag card to edit the details. Grouping and filters keep the strategy readable without hiding advanced controls.")
+
+    search_text = matrix_search.strip().lower()
+    grouped_rows = {}
+    for idx, row in matrix_df.iterrows():
+        haystack = " ".join([
+            str(row.get("category", "")),
+            str(row.get("key", "")),
+            str(row.get("desc", "")),
+            str(row.get("owner", "")),
+        ]).lower()
+        if search_text and search_text not in haystack:
+            continue
+        if matrix_category != "All categories" and str(row.get("category", "")).strip() != matrix_category:
+            continue
+        if matrix_type != "All" and str(row.get("type", "")).strip() != matrix_type:
+            continue
+        group_name = str(row.get("category", "")).strip() or "Uncategorized"
+        grouped_rows.setdefault(group_name, []).append(idx)
+
+    if not grouped_rows:
+        st.info("No tag rows match the current filters.")
+    else:
+        for group_name, row_indexes in grouped_rows.items():
+            with st.expander(f"{group_name} ({len(row_indexes)})", expanded=True):
+                for idx in row_indexes:
+                    row = matrix_df.loc[idx].copy()
+                    row_id = int(row.get("row_id", idx + 1))
+                    row_key = str(row.get("key", "")).strip()
+                    row_title = row_key or str(row.get("category", "")).strip() or f"Tag row {idx + 1}"
+                    row_scope = _row_scope_label(row)
+                    row_completion_pct = int(_row_completion(row) * 100)
+                    row_marker = "🔒" if row.get("type") == "governed" else "✏️"
+                    summary = f"{row_marker} {row_title} · {row_scope} · {row_completion_pct}% complete"
+
+                    with st.expander(summary, expanded=(not row_key or row_completion_pct < 100)):
+                        col_main, col_meta = st.columns([3, 2])
+                        with col_main:
+                            matrix_df.at[idx, "category"] = st.text_input(
+                                "Category",
+                                value=str(row.get("category", "")),
+                                key=f"row_{row_id}_category",
+                            )
+                            matrix_df.at[idx, "desc"] = st.text_area(
+                                "Description",
+                                value=str(row.get("desc", "")),
+                                key=f"row_{row_id}_desc",
+                                height=90,
+                            )
+                            matrix_df.at[idx, "key"] = st.text_input(
+                                "Tag key (snake_case)",
+                                value=str(row.get("key", "")),
+                                key=f"row_{row_id}_key",
+                                placeholder="e.g. sensitivity_level",
+                            )
+                            matrix_df.at[idx, "values"] = st.text_input(
+                                "Allowed values (comma-separated)",
+                                value=str(row.get("values", "")),
+                                key=f"row_{row_id}_values",
+                                placeholder="e.g. public, sensitive, confidential",
+                            )
+                        with col_meta:
+                            matrix_df.at[idx, "type"] = st.selectbox(
+                                "Governance",
+                                ["governed", "ungoverned"],
+                                index=["governed", "ungoverned"].index(str(row.get("type", "governed"))),
+                                key=f"row_{row_id}_type",
+                            )
+                            matrix_df.at[idx, "creates"] = st.selectbox(
+                                "Who creates",
+                                CREATE_OPTIONS,
+                                index=CREATE_OPTIONS.index(row.get("creates")) if row.get("creates") in CREATE_OPTIONS else 0,
+                                key=f"row_{row_id}_creates",
+                            )
+                            matrix_df.at[idx, "assigns"] = st.selectbox(
+                                "Who assigns",
+                                ASSIGN_OPTIONS,
+                                index=ASSIGN_OPTIONS.index(row.get("assigns")) if row.get("assigns") in ASSIGN_OPTIONS else 0,
+                                key=f"row_{row_id}_assigns",
+                            )
+                            matrix_df.at[idx, "automation"] = st.selectbox(
+                                "Automation",
+                                AUTOMATION_OPTIONS,
+                                index=AUTOMATION_OPTIONS.index(row.get("automation")) if row.get("automation") in AUTOMATION_OPTIONS else 0,
+                                key=f"row_{row_id}_automation",
+                            )
+                            matrix_df.at[idx, "owner"] = st.text_input(
+                                "Owner / DRI",
+                                value=str(row.get("owner", "")),
+                                key=f"row_{row_id}_owner",
+                                placeholder="e.g. Data Governance Council",
+                            )
+
+                        st.markdown("**Scope**")
+                        scope_cols = st.columns(len(SCOPE_OPTIONS))
+                        for scope_name, scope_col in zip(SCOPE_OPTIONS, scope_cols):
+                            with scope_col:
+                                matrix_df.at[idx, f"scope_{scope_name}"] = st.checkbox(
+                                    scope_name.title(),
+                                    value=bool(row.get(f"scope_{scope_name}")),
+                                    key=f"row_{row_id}_scope_{scope_name}",
+                                )
+
+                        updated_row = matrix_df.loc[idx]
+                        st.caption(
+                            f"This row is **{int(_row_completion(updated_row) * 100)}% complete**. "
+                            f"Current scope: {_row_scope_label(updated_row)}."
+                        )
+                        preview = {
+                            "category": updated_row.get("category", ""),
+                            "description": updated_row.get("desc", ""),
+                            "governance": updated_row.get("type", ""),
+                            "tag_key": updated_row.get("key", ""),
+                            "allowed_values": updated_row.get("values", ""),
+                            "scope": _row_scope_label(updated_row),
+                            "who_creates": updated_row.get("creates", ""),
+                            "who_assigns": updated_row.get("assigns", ""),
+                            "automation": updated_row.get("automation", ""),
+                            "owner": updated_row.get("owner", ""),
+                        }
+                        st.code("\n".join(f"{k}: {v}" for k, v in preview.items()), language="yaml")
+
+                        row_action_left, row_action_mid, row_action_right = st.columns([1, 1, 4])
+                        with row_action_left:
+                            if st.button("Duplicate", key=f"row_{row_id}_duplicate", use_container_width=True):
+                                cloned = updated_row.to_dict()
+                                cloned["row_id"] = st.session_state.next_row_id
+                                st.session_state.next_row_id += 1
+                                st.session_state.tag_rows = pd.concat(
+                                    [matrix_df, pd.DataFrame([cloned])],
+                                    ignore_index=True,
+                                )
+                                st.rerun()
+                        with row_action_mid:
+                            if st.button("Delete", key=f"row_{row_id}_delete", use_container_width=True):
+                                st.session_state.tag_rows = matrix_df.drop(index=idx).reset_index(drop=True)
+                                st.rerun()
+                        with row_action_right:
+                            st.caption("Use duplicate when a tag pattern is similar and only the key, values, or scope needs to change.")
+
+        st.session_state.tag_rows = matrix_df.reset_index(drop=True)
 
     st.markdown("---")
     st.markdown("#### Strategy notes")

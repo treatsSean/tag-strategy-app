@@ -11,13 +11,24 @@ SCOPE_OPTIONS = ["catalog", "schema", "table", "view", "column"]
 SCOPE_COLS = [f"scope_{s}" for s in SCOPE_OPTIONS]
 CREATE_OPTIONS = ["Central governance", "Domain leads", "Team leads", "Anyone"]
 ASSIGN_OPTIONS = [
-    "Governance team only", "Service principals / admins", "Stewards / service principals",
-    "Automation / stewards", "Governance team / owners", "Team leads / finance ops",
-    "Practitioners / team leads", "Practitioners", "Anyone",
+    "Governance team only",
+    "Service principals / admins",
+    "Stewards / service principals",
+    "Automation / stewards",
+    "Governance team / owners",
+    "Team leads / finance ops",
+    "Practitioners / team leads",
+    "Practitioners",
+    "Anyone",
 ]
 AUTOMATION_OPTIONS = [
-    "None", "Manual", "Manual + propagation", "Audit & review candidates",
-    "AMM surfaces candidates", "Auto-detect candidates", "Auto-assign (no review)",
+    "None",
+    "Manual",
+    "Manual + propagation",
+    "Audit & review candidates",
+    "AMM surfaces candidates",
+    "Auto-detect candidates",
+    "Auto-assign (no review)",
     "Propagation only",
 ]
 
@@ -57,9 +68,17 @@ def _with_row_ids(df):
 
 def _blank_row():
     row = {
-        "category": "New category", "desc": "", "type": "governed", "key": "", "values": "",
-        **_scope_flags("table"), "creates": "Central governance", "assigns": "Practitioners",
-        "automation": "Manual", "owner": "", "row_id": st.session_state.next_row_id,
+        "category": "New category",
+        "desc": "",
+        "type": "governed",
+        "key": "",
+        "values": "",
+        **_scope_flags("table"),
+        "creates": "Central governance",
+        "assigns": "Practitioners",
+        "automation": "Manual",
+        "owner": "",
+        "row_id": st.session_state.next_row_id,
     }
     st.session_state.next_row_id += 1
     return row
@@ -77,28 +96,42 @@ if "theme_mode" not in st.session_state:
 THEME = st.session_state.theme_mode
 
 if THEME == "Light":
-    _PAGE_BG = "#FFFFFF"
-    _SIDEBAR_BG = "#FFFFFF"
-    _SIDEBAR_TEXT = "#1B2431"
-    _HEADER_BG = "#FFFFFF"
-    _HEADER_TEXT = "#1B2431"
-    _FOOTER_BG = "#EAECEF"
-    _FOOTER_TEXT = "#1B2431"
-    _CODE_BG = "#F4F4F5"
-    _CODE_TEXT = "#1B2431"
+    _PAGE_BG = "#F9F7F4"       # Oat Light
+    _SIDEBAR_BG = "#FFFFFF"    # White
+    _SIDEBAR_TEXT = "#0B2026"  # Navy 900
+    _SIDEBAR_BORDER = "rgba(11, 32, 38, 0.12)"
+    _HEADER_BG = "#FFFFFF"     # White
+    _HEADER_TEXT = "#0B2026"   # Navy 900
+    _FOOTER_BG = "#EEEDE9"     # Oat Medium
+    _FOOTER_TEXT = "#0B2026"   # Navy 900
+    _CODE_BG = "#EEEDE9"       # Oat Medium
+    _CODE_TEXT = "#0B2026"     # Navy 900
 else:
-    _PAGE_BG = "#F9F9F9"
-    _SIDEBAR_BG = "#1B2431"
-    _SIDEBAR_TEXT = "#F9F9F9"
-    _HEADER_BG = "#1B2431"
-    _HEADER_TEXT = "#F9F9F9"
-    _FOOTER_BG = "#2B3546"
-    _FOOTER_TEXT = "#F9F9F9"
-    _CODE_BG = "#1E293B"
-    _CODE_TEXT = "#E2E8F0"
+    _PAGE_BG = "#F9F7F4"       # Oat Light
+    _SIDEBAR_BG = "#0B2026"    # Navy 900
+    _SIDEBAR_TEXT = "#F9F7F4"  # Oat Light
+    _SIDEBAR_BORDER = "rgba(249, 247, 244, 0.18)"
+    _HEADER_BG = "#0B2026"     # Navy 900
+    _HEADER_TEXT = "#F9F7F4"   # Oat Light
+    _FOOTER_BG = "#0B2026"     # Navy 900
+    _FOOTER_TEXT = "#F9F7F4"   # Oat Light
+    _CODE_BG = "#0B2026"       # Navy 900
+    _CODE_TEXT = "#F9F7F4"     # Oat Light
 
 st.markdown(f"""
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+
+  body, body * {{
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  }}
+  [data-testid="stIconMaterial"], [data-testid="stIconMaterial"] * {{
+    font-family: 'Material Symbols Rounded' !important;
+  }}
+  code, pre, [data-testid="stCode"] pre, [data-testid="stCode"] code {{
+    font-family: 'DM Mono', monospace !important;
+  }}
+
   [data-testid="stAppViewContainer"] {{ background-color: {_PAGE_BG}; }}
   [data-testid="stSidebar"] {{ background-color: {_SIDEBAR_BG}; }}
   [data-testid="stSidebar"] * {{ color: {_SIDEBAR_TEXT} !important; }}
@@ -123,18 +156,13 @@ st.markdown(f"""
   }}
 
   .stButton > button[kind="secondary"] {{
-    color: #1F6FEB !important;
-    border-color: #1F6FEB !important;
+    color: #FF3621 !important;
+    border-color: #FF3621 !important;
   }}
-  a, a:visited {{ color: #1F6FEB !important; }}
+  a, a:visited {{ color: #FF3621 !important; }}
 
-  .db-footer-bar {{
-    background: {_FOOTER_BG};
-    color: {_FOOTER_TEXT};
-    padding: 10px 16px;
-    border-radius: 6px;
-    margin-top: 12px;
-    font-size: 12px;
+  [data-testid="stCode"] {{
+    background-color: {_CODE_BG} !important;
   }}
 
   /* ── Layout density fixes ─────────────────────────────────────── */
@@ -149,11 +177,11 @@ st.markdown(f"""
     gap: 10px;
     padding-bottom: 12px;
     margin-bottom: 8px;
-    border-bottom: 1px solid rgba(27, 36, 49, 0.12);
+    border-bottom: 1px solid rgba(11, 32, 38, 0.12);
   }}
   .db-title-row .db-title-icon {{ font-size: 26px; line-height: 1; }}
-  .db-title-row .db-title-text {{ font-size: 20px; font-weight: 700; color: #1B2431; line-height: 1.25; }}
-  .db-title-row .db-title-caption {{ font-size: 12.5px; color: #667085; margin-top: 2px; }}
+  .db-title-row .db-title-text {{ font-size: 20px; font-weight: 700; color: #0B2026; line-height: 1.25; }}
+  .db-title-row .db-title-caption {{ font-size: 12.5px; color: rgba(11, 32, 38, 0.62); margin-top: 2px; }}
 
   .db-sidebar-brand {{
     display: flex;
@@ -161,7 +189,7 @@ st.markdown(f"""
     gap: 8px;
     padding-bottom: 10px;
     margin-bottom: 12px;
-    border-bottom: 1px solid rgba(249, 249, 249, 0.18);
+    border-bottom: 1px solid {_SIDEBAR_BORDER};
   }}
   .db-sidebar-brand .db-sidebar-icon {{ font-size: 18px; }}
   .db-sidebar-brand .db-sidebar-name {{ font-size: 13.5px; font-weight: 700; letter-spacing: 0.02em; }}
@@ -193,6 +221,15 @@ st.markdown(f"""
   }}
   [data-testid="stTabs"] {{
     margin-top: 0.25rem !important;
+  }}
+
+  .db-footer-bar {{
+    background: {_FOOTER_BG};
+    color: {_FOOTER_TEXT};
+    padding: 10px 16px;
+    border-radius: 6px;
+    margin-top: 12px;
+    font-size: 12px;
   }}
 </style>
 """, unsafe_allow_html=True)

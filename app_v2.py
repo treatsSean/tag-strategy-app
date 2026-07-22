@@ -565,7 +565,7 @@ with tab_matrix:
                     row_marker = "🔒" if row.get("type") == "governed" else "✏️"
                     summary = f"{row_marker} {row_title} · {_row_scope_label(row)} · {row_completion_pct}% complete"
 
-                    with st.expander(summary, expanded=(not row_key or row_completion_pct < 100)):
+                    with st.expander(summary, expanded=False):
                         col_main, col_meta = st.columns([3, 2])
                         with col_main:
                             matrix_df.at[idx, "category"] = st.text_input("Category", value=str(row.get("category", "")), key=f"row_{row_id}_category")

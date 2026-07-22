@@ -7,6 +7,13 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 
+SCOPE_OPTIONS = ["catalog", "schema", "table", "view", "column"]
+SCOPE_COLS = [f"scope_{s}" for s in SCOPE_OPTIONS]
+
+
+def _scope_flags(*active):
+    return {f"scope_{s}": (s in active) for s in SCOPE_OPTIONS}
+
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="UC Tag Strategy Builder",
@@ -15,25 +22,69 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Theme ──────────────────────────────────────────────────────────────────────
+if "theme_mode" not in st.session_state:
+    st.session_state.theme_mode = "Dark Header"
+THEME = st.session_state.theme_mode
+
+if THEME == "Light":
+    _PAGE_BG = "#FFFFFF"
+    _SIDEBAR_BG = "#FFFFFF"
+    _SIDEBAR_TEXT = "#1B2431"
+    _HEADER_BG = "#FFFFFF"
+    _FOOTER_BG = "#EAECEF"
+    _FOOTER_TEXT = "#1B2431"
+    _CODE_BG = "#F4F4F5"
+    _CODE_TEXT = "#1B2431"
+else:
+    _PAGE_BG = "#F9F9F9"
+    _SIDEBAR_BG = "#1B2431"
+    _SIDEBAR_TEXT = "#F9F9F9"
+    _HEADER_BG = "#1B2431"
+    _FOOTER_BG = "#2B3546"
+    _FOOTER_TEXT = "#F9F9F9"
+    _CODE_BG = "#1E293B"
+    _CODE_TEXT = "#E2E8F0"
+
 # ── Databricks branding ────────────────────────────────────────────────────────
-st.markdown("""
+st.markdown(f"""
 <style>
-  /* Databricks red accent on primary buttons */
-  .stButton > button[kind="primary"] {
+  /* Page background */
+  [data-testid="stAppViewContainer"] {{ background-color: {_PAGE_BG}; }}
+  [data-testid="stSidebar"] {{ background-color: {_SIDEBAR_BG}; }}
+  [data-testid="stSidebar"] * {{ color: {_SIDEBAR_TEXT} !important; }}
+
+  /* Header: chrome with red accent stripe (color depends on theme) */
+  [data-testid="stHeader"] {{
+    background: {_HEADER_BG};
+    border-bottom: 3px solid #FF3621;
+  }}
+
+  /* Primary buttons: Databricks red (same in both themes) */
+  .stButton > button[kind="primary"] {{
     background-color: #FF3621 !important;
     border-color: #FF3621 !important;
     color: white !important;
-  }
-  .stButton > button[kind="primary"]:hover {
+  }}
+  .stButton > button[kind="primary"]:hover {{
     background-color: #D42E1A !important;
     border-color: #D42E1A !important;
-  }
+  }}
+
+  /* Secondary actions and links: Databricks blue */
+  .stButton > button[kind="secondary"] {{
+    color: #1F6FEB !important;
+    border-color: #1F6FEB !important;
+  }}
+  a, a:visited {{ color: #1F6FEB !important; }}
+
   /* Governed row highlight */
-  .governed-tag { border-left: 3px solid #FF3621; padding-left: 8px; }
+  .governed-tag {{ border-left: 3px solid #FF3621; padding-left: 8px; }}
+
   /* Code block style */
-  .sql-block {
-    background: #1B2431;
-    color: #C9D1D9;
+  .sql-block {{
+    background: {_CODE_BG};
+    color: {_CODE_TEXT};
     padding: 16px;
     border-radius: 6px;
     font-family: 'SF Mono', 'Fira Code', monospace;
@@ -41,9 +92,17 @@ st.markdown("""
     line-height: 1.8;
     white-space: pre;
     overflow-x: auto;
-  }
-  /* Header stripe */
-  [data-testid="stHeader"] { background: #1B2431; }
+  }}
+
+  /* Footer / status bar */
+  .db-footer-bar {{
+    background: {_FOOTER_BG};
+    color: {_FOOTER_TEXT};
+    padding: 10px 16px;
+    border-radius: 6px;
+    margin-top: 12px;
+    font-size: 12px;
+  }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -126,50 +185,52 @@ def _get_warehouse_id(w):
 DEFAULT_ROWS = [
     {"category": "Classification / Sensitivity", "desc": "Overall risk level. Primary signal for access control policies.",
      "type": "governed", "key": "sensitivity_level", "values": "public, sensitive, confidential, restricted",
-     "scope": "table, view", "creates": "Central governance", "assigns": "Stewards / service principals",
-     "automation": "Audit & review candidates", "owner": ""},
+     "creates": "Central governance", "assigns": "Stewards / service principals",
+     "automation": "Audit & review candidates", "owner": "", **_scope_flags("table", "view")},
     {"category": "PII Classification", "desc": "Column-level evidence of specific personal data types.",
      "type": "governed", "key": "pii", "values": "ssn, email, phone, name, dob, address, ip_address",
-     "scope": "column", "creates": "Central governance", "assigns": "Automation / stewards",
-     "automation": "Auto-detect candidates", "owner": ""},
+     "creates": "Central governance", "assigns": "Automation / stewards",
+     "automation": "Auto-detect candidates", "owner": "", **_scope_flags("column")},
     {"category": "Compliance / Regulatory", "desc": "Regulatory frameworks that apply to this asset.",
      "type": "governed", "key": "compliance", "values": "pci, hipaa, gdpr, ccpa, sox",
-     "scope": "table, schema", "creates": "Central governance", "assigns": "Service principals / admins",
-     "automation": "Manual + propagation", "owner": ""},
+     "creates": "Central governance", "assigns": "Service principals / admins",
+     "automation": "Manual + propagation", "owner": "", **_scope_flags("table", "schema")},
     {"category": "Domain", "desc": "Business area the asset belongs to. Powers Databricks discovery.",
      "type": "governed", "key": "domain", "values": "finance, sales, marketing, engineering, hr, product, legal",
-     "scope": "catalog, schema", "creates": "Central governance", "assigns": "Practitioners / team leads",
-     "automation": "Manual", "owner": ""},
+     "creates": "Central governance", "assigns": "Practitioners / team leads",
+     "automation": "Manual", "owner": "", **_scope_flags("catalog", "schema")},
     {"category": "Subdomain", "desc": "Finer-grained function within a domain for large orgs.",
      "type": "governed", "key": "subdomain", "values": "audit, tax, fp_a, demand_gen, eng_data",
-     "scope": "schema, table", "creates": "Central governance", "assigns": "Practitioners",
-     "automation": "Manual", "owner": ""},
+     "creates": "Central governance", "assigns": "Practitioners",
+     "automation": "Manual", "owner": "", **_scope_flags("schema", "table")},
     {"category": "Certification", "desc": "Signals the asset is the validated source of truth.",
      "type": "governed", "key": "certification", "values": "certified",
-     "scope": "table, schema", "creates": "Central governance", "assigns": "Governance team only",
-     "automation": "AMM surfaces candidates", "owner": ""},
+     "creates": "Central governance", "assigns": "Governance team only",
+     "automation": "AMM surfaces candidates", "owner": "", **_scope_flags("table", "schema")},
     {"category": "Lifecycle / Deprecation", "desc": "Asset health and maintenance state for discovery quality.",
      "type": "governed", "key": "lifecycle", "values": "active, deprecated, archived",
-     "scope": "table, view, schema", "creates": "Central governance", "assigns": "Governance team / owners",
-     "automation": "AMM surfaces candidates", "owner": ""},
+     "creates": "Central governance", "assigns": "Governance team / owners",
+     "automation": "AMM surfaces candidates", "owner": "", **_scope_flags("table", "view", "schema")},
     {"category": "Cost Attribution", "desc": "Ties assets to cost centers for chargeback reporting.",
      "type": "governed", "key": "cost_center", "values": "",
-     "scope": "catalog, schema", "creates": "Central governance", "assigns": "Team leads / finance ops",
-     "automation": "Manual", "owner": ""},
+     "creates": "Central governance", "assigns": "Team leads / finance ops",
+     "automation": "Manual", "owner": "", **_scope_flags("catalog", "schema")},
     {"category": "Team / Project", "desc": "Owning team or project for routing and discoverability.",
      "type": "governed", "key": "team", "values": "",
-     "scope": "schema, table", "creates": "Central governance", "assigns": "Practitioners",
-     "automation": "Manual", "owner": ""},
+     "creates": "Central governance", "assigns": "Practitioners",
+     "automation": "Manual", "owner": "", **_scope_flags("schema", "table")},
     {"category": "Free-form / Ad hoc", "desc": "Practitioner annotations, workflow flags, personal notes.",
      "type": "ungoverned", "key": "", "values": "",
-     "scope": "table, column, schema", "creates": "Anyone", "assigns": "Anyone",
-     "automation": "None", "owner": ""},
+     "creates": "Anyone", "assigns": "Anyone",
+     "automation": "None", "owner": "", **_scope_flags("table", "column", "schema")},
 ]
 
-COLUMNS = ["category", "desc", "type", "key", "values", "scope", "creates", "assigns", "automation", "owner"]
+COLUMNS = ["category", "desc", "type", "key", "values", *SCOPE_COLS, "creates", "assigns", "automation", "owner"]
 COL_LABELS = {
     "category": "Category", "desc": "Description", "type": "Governance",
-    "key": "Tag Key", "values": "Allowed Values", "scope": "Scope",
+    "key": "Tag Key", "values": "Allowed Values",
+    "scope_catalog": "Catalog", "scope_schema": "Schema", "scope_table": "Table",
+    "scope_view": "View", "scope_column": "Column",
     "creates": "Who Creates", "assigns": "Who Assigns",
     "automation": "Automation", "owner": "Owner / DRI",
 }
@@ -198,6 +259,10 @@ st.divider()
 
 # ── Sidebar: workspace connection ──────────────────────────────────────────────
 with st.sidebar:
+    st.markdown("### 🎨 Appearance")
+    st.radio("Theme", ["Dark Header", "Light"], key="theme_mode", horizontal=True)
+    st.markdown("---")
+
     st.markdown("### 🔌 Workspace")
     w, conn_err = get_workspace_client()
 
@@ -234,7 +299,7 @@ with st.sidebar:
         filled = (
             (gov_rows["key"] != "").sum() +
             (gov_rows["values"] != "").sum() +
-            (gov_rows["scope"] != "").sum() +
+            (gov_rows[SCOPE_COLS].any(axis=1)).sum() +
             (gov_rows["owner"] != "").sum()
         )
         total = len(gov_rows) * 4
@@ -294,7 +359,11 @@ with tab_matrix:
             "type":       st.column_config.SelectboxColumn("Governance", options=["governed", "ungoverned"], width="small"),
             "key":        st.column_config.TextColumn("Tag Key (snake_case)", width="medium"),
             "values":     st.column_config.TextColumn("Allowed Values (comma-sep)", width="large"),
-            "scope":      st.column_config.TextColumn("Scope", width="medium"),
+            "scope_catalog": st.column_config.CheckboxColumn("Catalog", width="small"),
+            "scope_schema":  st.column_config.CheckboxColumn("Schema", width="small"),
+            "scope_table":   st.column_config.CheckboxColumn("Table", width="small"),
+            "scope_view":    st.column_config.CheckboxColumn("View", width="small"),
+            "scope_column":  st.column_config.CheckboxColumn("Column", width="small"),
             "creates":    st.column_config.SelectboxColumn("Who Creates",
                             options=["Central governance", "Domain leads", "Team leads", "Anyone"], width="medium"),
             "assigns":    st.column_config.SelectboxColumn("Who Assigns",
@@ -314,6 +383,27 @@ with tab_matrix:
         key="matrix_editor",
     )
     st.session_state.tag_rows = edited
+
+    st.markdown("---")
+    st.markdown("#### Preview — key:value pairs per row")
+    st.caption("Each row's fields reconstructed as key:value pairs, reflecting the latest matrix edits.")
+    for i, row in st.session_state.tag_rows.reset_index(drop=True).iterrows():
+        label = row.get("key") or row.get("category") or f"Row {i + 1}"
+        with st.expander(f"`{label}`" if row.get("key") else str(label)):
+            scope_str = ", ".join(s for s in SCOPE_OPTIONS if row.get(f"scope_{s}")) or "—"
+            preview = {
+                "category": row.get("category", ""),
+                "description": row.get("desc", ""),
+                "governance": row.get("type", ""),
+                "tag_key": row.get("key", ""),
+                "allowed_values": row.get("values", ""),
+                "scope": scope_str,
+                "who_creates": row.get("creates", ""),
+                "who_assigns": row.get("assigns", ""),
+                "automation": row.get("automation", ""),
+                "owner": row.get("owner", ""),
+            }
+            st.code("\n".join(f"{k}: {v}" for k, v in preview.items()), language="yaml")
 
     st.markdown("---")
     st.markdown("#### Strategy notes")
@@ -340,7 +430,7 @@ def _vals(row):
 
 
 def _scopes(row):
-    return [s.strip() for s in str(row.get("scope", "")).split(",") if s.strip()]
+    return [s for s in SCOPE_OPTIONS if row.get(f"scope_{s}")]
 
 
 def generate_sql(catalog="", schema="", table=""):
@@ -369,7 +459,7 @@ def generate_sql(catalog="", schema="", table=""):
             f"-- Key:    {row['key']}",
             f"-- Desc:   {row.get('desc', row['category'])}",
             f"-- Values: {' | '.join(vals) if vals else '(open string)'}",
-            f"-- Scope:  {row.get('scope', '—')}  |  Owner: {row.get('owner', '—') or '—'}",
+            f"-- Scope:  {', '.join(_scopes(row)) or '—'}  |  Owner: {row.get('owner', '—') or '—'}",
             "",
         ]
 
@@ -790,11 +880,7 @@ with tab_apply:
 # ── Footer ─────────────────────────────────────────────────────────────────────
 st.divider()
 st.markdown(
-    """
-    <div class="db-footer-bar">
-      Unity Catalog Tag Strategy Builder · Built with Streamlit + Databricks SDK ·
-      Best practices from <a href="https://docs.databricks.com" target="_blank">Databricks documentation</a>
-    </div>
-    """,
+    '<div class="db-footer-bar">Unity Catalog Tag Strategy Builder · Built with Streamlit + Databricks SDK · '
+    'Best practices from <a href="https://docs.databricks.com" target="_blank">Databricks documentation</a></div>',
     unsafe_allow_html=True,
 )

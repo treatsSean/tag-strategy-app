@@ -789,7 +789,12 @@ with tab_apply:
 
 # ── Footer ─────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption(
-    "Unity Catalog Tag Strategy Builder · Built with Streamlit + Databricks SDK · "
-    "Best practices from [Databricks documentation](https://docs.databricks.com)"
+st.markdown(
+    """
+    <div class="db-footer-bar">
+      Unity Catalog Tag Strategy Builder · Built with Streamlit + Databricks SDK ·
+      Best practices from <a href="https://docs.databricks.com" target="_blank">Databricks documentation</a>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )

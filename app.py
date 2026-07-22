@@ -32,7 +32,6 @@ if THEME == "Light":
     _SIDEBAR_BG = "#FFFFFF"
     _SIDEBAR_TEXT = "#1B2431"
     _HEADER_BG = "#FFFFFF"
-    _HEADER_TEXT = "#1B2431"
     _FOOTER_BG = "#EAECEF"
     _FOOTER_TEXT = "#1B2431"
     _CODE_BG = "#F4F4F5"
@@ -42,7 +41,6 @@ else:
     _SIDEBAR_BG = "#1B2431"
     _SIDEBAR_TEXT = "#F9F9F9"
     _HEADER_BG = "#1B2431"
-    _HEADER_TEXT = "#F9F9F9"
     _FOOTER_BG = "#2B3546"
     _FOOTER_TEXT = "#F9F9F9"
     _CODE_BG = "#1E293B"
@@ -60,10 +58,6 @@ st.markdown(f"""
   [data-testid="stHeader"] {{
     background: {_HEADER_BG};
     border-bottom: 3px solid #FF3621;
-  }}
-  [data-testid="stHeader"] * {{
-    color: {_HEADER_TEXT} !important;
-    fill: {_HEADER_TEXT} !important;
   }}
 
   /* Primary buttons: Databricks red (same in both themes) */
@@ -320,12 +314,70 @@ with st.sidebar:
 
 
 # ── Main tabs ──────────────────────────────────────────────────────────────────
-tab_matrix, tab_sql, tab_tf, tab_apply = st.tabs([
+tab_help, tab_matrix, tab_sql, tab_tf, tab_apply = st.tabs([
+    "📘 How to Use",
     "📋 Tag Matrix",
     "⚡ SQL — Apply Tags",
     "🏗 Terraform HCL",
     "🚀 Apply to Workspace",
 ])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 0 — How to Use
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_help:
+    st.markdown("#### What this app does")
+    st.markdown(
+        "The **Unity Catalog Tag Strategy Builder** helps you design a governed tagging "
+        "taxonomy for Unity Catalog before you roll it out. Instead of tagging objects ad hoc, "
+        "you define — up front — which tag keys exist, whether they're **governed** (centrally "
+        "controlled, enforced allowed values) or **ungoverned** (free-form), which object "
+        "**scopes** they apply to (catalog / schema / table / view / column), who is allowed to "
+        "create and assign them, and how much of the process is automated. Once the taxonomy is "
+        "defined, the app generates ready-to-run **SQL**, exportable **Terraform HCL**, or can "
+        "**apply tags directly** to a real catalog, schema, or table in this workspace."
+    )
+
+    st.markdown("---")
+    st.markdown("#### How to use it")
+    st.markdown(
+        "1. **🎨 Appearance (sidebar)** — switch between the *Dark Header* and *Light* look. "
+        "Purely cosmetic; the taxonomy behaves identically in either mode.\n"
+        "2. **🔌 Workspace / 🎯 Target Object (sidebar)** — pick the catalog, schema, and table "
+        "you're designing for. These selections populate the generated SQL, Terraform, and the "
+        "Apply tab. The **Strategy completeness** meter tracks how many governed rows have a "
+        "key, allowed values, scope, and owner filled in.\n"
+        "3. **📋 Tag Matrix** — edit the taxonomy directly in the table. Add or delete rows, "
+        "tick the scope checkboxes (catalog/schema/table/view/column) for each tag, and pick "
+        "*Who Creates*, *Who Assigns*, and *Automation* from their dropdowns. Expand "
+        "**Preview — key:value pairs per row** below the table to see any row's fields "
+        "reconstructed as a plain key:value block. Use **↺ Reset to defaults** (sidebar) to "
+        "start over from the built-in taxonomy.\n"
+        "4. **⚡ SQL — Apply Tags** — copy or download a full `ALTER ... SET TAGS` script scoped "
+        "to your target object, plus verification queries against `information_schema`.\n"
+        "5. **🏗 Terraform HCL** — copy or download equivalent `databricks_catalog` / "
+        "`databricks_schema` / `databricks_sql_table` resource blocks with `tags = {...}` "
+        "populated from your matrix, for teams that manage Unity Catalog declaratively.\n"
+        "6. **🚀 Apply to Workspace** — for a connected workspace, select governed tags whose "
+        "scope matches your target object, choose a value, preview the exact SQL, and apply it "
+        "live via a running SQL warehouse."
+    )
+
+    st.markdown("---")
+    st.markdown("#### Learn more — Unity Catalog tags documentation")
+    st.markdown(
+        "* [Apply tags to Unity Catalog securable objects](https://docs.databricks.com/aws/en/database-objects/tags/) "
+        "— governed vs. ungoverned tags, SQL syntax (`SET TAGS` / `SET TAG ON`), system tags, and inheritance rules.\n"
+        "* [Governed tags for data discovery](https://docs.databricks.com/aws/en/data-governance/unity-catalog/data-discovery/) "
+        "— using tags to make data browsable, filterable, and to flag certified or deprecated assets.\n"
+        "* [Attribute-based access control (ABAC) core concepts](https://docs.databricks.com/aws/en/data-governance/unity-catalog/abac/core-concepts/) "
+        "— how governed tags power row filter, column mask, and GRANT policies.\n"
+        "* [ABAC requirements, quotas, and limitations](https://docs.databricks.com/aws/en/data-governance/unity-catalog/abac/requirements/) "
+        "— constraints to check before designing tag-driven access policies.\n"
+        "* [Databricks CLI tag-policies commands](https://docs.databricks.com/aws/en/dev-tools/cli/commands/) "
+        "— create/update/delete governed tag policies from the CLI once your taxonomy is finalized."
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

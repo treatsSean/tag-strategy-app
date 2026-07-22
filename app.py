@@ -32,6 +32,7 @@ if THEME == "Light":
     _SIDEBAR_BG = "#FFFFFF"
     _SIDEBAR_TEXT = "#1B2431"
     _HEADER_BG = "#FFFFFF"
+    _HEADER_TEXT = "#1B2431"
     _FOOTER_BG = "#EAECEF"
     _FOOTER_TEXT = "#1B2431"
     _CODE_BG = "#F4F4F5"
@@ -41,6 +42,7 @@ else:
     _SIDEBAR_BG = "#1B2431"
     _SIDEBAR_TEXT = "#F9F9F9"
     _HEADER_BG = "#1B2431"
+    _HEADER_TEXT = "#F9F9F9"
     _FOOTER_BG = "#2B3546"
     _FOOTER_TEXT = "#F9F9F9"
     _CODE_BG = "#1E293B"
@@ -58,6 +60,10 @@ st.markdown(f"""
   [data-testid="stHeader"] {{
     background: {_HEADER_BG};
     border-bottom: 3px solid #FF3621;
+  }}
+  [data-testid="stHeader"] * {{
+    color: {_HEADER_TEXT} !important;
+    fill: {_HEADER_TEXT} !important;
   }}
 
   /* Primary buttons: Databricks red (same in both themes) */

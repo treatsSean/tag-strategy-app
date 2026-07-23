@@ -1,1 +1,1 @@
-command: ["streamlit", "run", "app_v2_fixed.py", "--server.enableCORS", "false", "--server.enableXsrfProtection", "false"]
+command: ["streamlit", "run", "app_v2.py", "--server.enableCORS", "false", "--server.enableXsrfProtection", "false"]

@@ -217,19 +217,35 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 
-@st.cache_resource(show_spinner=False)
+def get_user_access_token():
+    """Read the caller's forwarded OAuth token (user authorization) so every query below runs
+    under the viewing user's own Unity Catalog permissions — never a shared service-principal identity.
+    This is a governance requirement: no one should see tag data they wouldn't otherwise have access to."""
+    try:
+        return st.context.headers.get("x-forwarded-access-token")
+    except Exception:
+        return None
+
+
 def get_workspace_client():
+    """Build a WorkspaceClient scoped to the current viewer. Intentionally NOT cached with
+    st.cache_resource: Streamlit resource/data caches are shared across all sessions, and caching a
+    per-user client (or its results) without keying on user identity would leak one user's access to another."""
+    token = get_user_access_token()
     try:
         from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
-        w.current_user.me()
-        return w, None
+        from databricks.sdk.core import Config
+        cfg = Config()
+        w = WorkspaceClient(host=cfg.host, token=token) if token else WorkspaceClient()
+        me = w.current_user.me()
+        user_key = me.user_name or me.display_name or "unknown"
+        return w, user_key, None
     except Exception as e:
-        return None, str(e)
+        return None, None, str(e)
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-def list_catalogs(_w):
+def list_catalogs(_w, user_key):
     try:
         return [c.name for c in _w.catalogs.list() if c.name]
     except Exception:
@@ -237,7 +253,7 @@ def list_catalogs(_w):
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-def list_schemas(_w, catalog):
+def list_schemas(_w, catalog, user_key):
     try:
         return [s.name for s in _w.schemas.list(catalog_name=catalog) if s.name]
     except Exception:
@@ -245,7 +261,7 @@ def list_schemas(_w, catalog):
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-def list_tables(_w, catalog, schema):
+def list_tables(_w, catalog, schema, user_key):
     try:
         return [t.name for t in _w.tables.list(catalog_name=catalog, schema_name=schema) if t.name]
     except Exception:
@@ -266,7 +282,7 @@ def _get_warehouse_id(w):
 
 
 @st.cache_data(show_spinner=False, ttl=60)
-def get_existing_tags(_w, catalog, schema, table):
+def get_existing_tags(_w, catalog, schema, table, user_key):
     try:
         results = {}
         df = _w.statement_execution.execute(
@@ -479,26 +495,24 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    w, conn_err = get_workspace_client()
+    w, user_key, conn_err = get_workspace_client()
     if conn_err:
         st.error("Not connected — preview mode")
         w = None
+        user_key = None
     else:
-        try:
-            me = w.current_user.me()
-            st.caption(f"Connected as **{me.display_name or me.user_name}**")
-        except Exception:
-            st.caption("Connected")
+        st.caption(f"Connected as **{user_key}**")
+        st.caption("Runs with your own Unity Catalog permissions (user authorization) — you'll only ever see what you already have access to.")
 
     st.markdown("##### Target object")
     st.caption("Populates SQL, Terraform, and Apply tabs.")
-    catalogs = list_catalogs(w) if w else []
+    catalogs = list_catalogs(w, user_key) if w else []
     catalog_input = st.selectbox("Catalog", [""] + catalogs, key="sb_catalog") if catalogs else st.text_input("Catalog name", key="sb_catalog")
     st.session_state.target_catalog = catalog_input or ""
-    schemas = list_schemas(w, catalog_input) if (w and catalog_input) else []
+    schemas = list_schemas(w, catalog_input, user_key) if (w and catalog_input) else []
     schema_input = st.selectbox("Schema", [""] + schemas, key="sb_schema") if schemas else st.text_input("Schema name", key="sb_schema")
     st.session_state.target_schema = schema_input or ""
-    tables = list_tables(w, catalog_input, schema_input) if (w and catalog_input and schema_input) else []
+    tables = list_tables(w, catalog_input, schema_input, user_key) if (w and catalog_input and schema_input) else []
     table_input = st.selectbox("Table", [""] + tables, key="sb_table") if tables else st.text_input("Table name", key="sb_table")
     st.session_state.target_table = table_input or ""
 
@@ -794,7 +808,7 @@ with tab_apply:
             st.markdown(f"**Target:** `{'.'.join(filter(None, [cat, sch, tbl]))}`")
             if tbl:
                 with st.expander("View existing tags on this table", expanded=False):
-                    existing = get_existing_tags(w, cat, sch, tbl)
+                    existing = get_existing_tags(w, cat, sch, tbl, user_key)
                     if existing:
                         st.dataframe(pd.DataFrame(list(existing.items()), columns=["Tag Key", "Current Value"]), use_container_width=True, hide_index=True)
                     else:
@@ -878,7 +892,7 @@ with tab_apply:
                 st.caption("Select at least one tag above to preview the SQL before applying.")
 
 @st.cache_data(show_spinner=False, ttl=60)
-def get_catalog_tags_report(_w, catalog):
+def get_catalog_tags_report(_w, catalog, user_key):
     if not catalog:
         return pd.DataFrame(columns=["tag_name", "tag_value"])
     try:
@@ -893,7 +907,7 @@ def get_catalog_tags_report(_w, catalog):
 
 
 @st.cache_data(show_spinner=False, ttl=60)
-def get_schema_tags_report(_w, catalog, schema):
+def get_schema_tags_report(_w, catalog, schema, user_key):
     if not (catalog and schema):
         return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
     try:
@@ -911,7 +925,7 @@ def get_schema_tags_report(_w, catalog, schema):
 
 
 @st.cache_data(show_spinner=False, ttl=60)
-def get_table_tags_report(_w, catalog, schema, table):
+def get_table_tags_report(_w, catalog, schema, table, user_key):
     if not (catalog and schema):
         return pd.DataFrame(columns=["schema_name", "table_name", "tag_name", "tag_value"])
     try:
@@ -929,7 +943,7 @@ def get_table_tags_report(_w, catalog, schema, table):
 
 
 @st.cache_data(show_spinner=False, ttl=60)
-def get_column_tags_report(_w, catalog, schema, table):
+def get_column_tags_report(_w, catalog, schema, table, user_key):
     if not (catalog and schema):
         return pd.DataFrame(columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
     try:
@@ -968,7 +982,7 @@ with tab_report:
 
         report_frames = []
 
-        cat_tags_df = get_catalog_tags_report(w, cat)
+        cat_tags_df = get_catalog_tags_report(w, cat, user_key)
         st.markdown(f"##### Catalog-level tags — `{cat}`")
         if cat_tags_df.empty:
             st.caption("No catalog-level tags found.")
@@ -979,7 +993,7 @@ with tab_report:
             report_frames.append(tagged)
 
         if sch:
-            sch_tags_df = get_schema_tags_report(w, cat, sch)
+            sch_tags_df = get_schema_tags_report(w, cat, sch, user_key)
             st.markdown(f"##### Schema-level tags — `{cat}.{sch}`")
             if sch_tags_df.empty:
                 st.caption("No schema-level tags found.")
@@ -989,7 +1003,7 @@ with tab_report:
                 tagged["level"] = "schema"
                 report_frames.append(tagged)
 
-            tbl_tags_df = get_table_tags_report(w, cat, sch, tbl)
+            tbl_tags_df = get_table_tags_report(w, cat, sch, tbl, user_key)
             table_scope = f"{cat}.{sch}.{tbl}" if tbl else f"{cat}.{sch} (all tables)"
             st.markdown(f"##### Table-level tags — `{table_scope}`")
             if tbl_tags_df.empty:
@@ -1000,7 +1014,7 @@ with tab_report:
                 tagged["level"] = "table"
                 report_frames.append(tagged)
 
-            col_tags_df = get_column_tags_report(w, cat, sch, tbl)
+            col_tags_df = get_column_tags_report(w, cat, sch, tbl, user_key)
             st.markdown(f"##### Column-level tags — `{table_scope}`")
             if col_tags_df.empty:
                 st.caption("No column-level tags found.")

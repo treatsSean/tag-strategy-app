@@ -236,7 +236,7 @@ def get_workspace_client():
         from databricks.sdk import WorkspaceClient
         from databricks.sdk.core import Config
         cfg = Config()
-        w = WorkspaceClient(host=cfg.host, token=token) if token else WorkspaceClient()
+        w = WorkspaceClient(host=cfg.host, token=token, auth_type="pat") if token else WorkspaceClient()
         me = w.current_user.me()
         user_key = me.user_name or me.display_name or "unknown"
         return w, user_key, None
@@ -497,10 +497,7 @@ with st.sidebar:
 
     w, user_key, conn_err = get_workspace_client()
     if conn_err:
-        print(f"[tag-strategy-app] connection error: {conn_err}")
-        has_token = bool(get_user_access_token())
-        st.error(f"Not connected: {conn_err}")
-        st.caption(f"Forwarded user token present: {has_token}")
+        st.error("Not connected — preview mode")
         w = None
         user_key = None
     else:

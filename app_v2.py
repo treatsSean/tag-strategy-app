@@ -304,6 +304,10 @@ if "target_schema" not in st.session_state:
     st.session_state.target_schema = ""
 if "target_table" not in st.session_state:
     st.session_state.target_table = ""
+if st.session_state.pop("_reset_matrix_filters", False):
+    st.session_state.matrix_search = ""
+    st.session_state.matrix_category = "All categories"
+    st.session_state.matrix_type = "All"
 
 
 def _governed_rows():
@@ -591,9 +595,7 @@ with tab_matrix:
         if st.button("+ Add tag row", type="primary", use_container_width=True):
             new_row = _blank_row()
             st.session_state.tag_rows = pd.concat([st.session_state.tag_rows, pd.DataFrame([new_row])], ignore_index=True)
-            st.session_state.matrix_search = ""
-            st.session_state.matrix_category = "All categories"
-            st.session_state.matrix_type = "All"
+            st.session_state._reset_matrix_filters = True
             st.session_state.expand_row_id = new_row["row_id"]
             st.rerun()
     with action_right:

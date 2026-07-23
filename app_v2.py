@@ -247,7 +247,7 @@ def get_workspace_client():
 @st.cache_data(show_spinner=False, ttl=300)
 def list_catalogs(_w, user_key):
     try:
-        df = _w.statement_execution.execute(
+        df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement="SHOW CATALOGS",
         )
@@ -262,7 +262,7 @@ def list_catalogs(_w, user_key):
 @st.cache_data(show_spinner=False, ttl=300)
 def list_schemas(_w, catalog, user_key):
     try:
-        df = _w.statement_execution.execute(
+        df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement=f"SELECT schema_name FROM `{catalog}`.information_schema.schemata",
         )
@@ -277,7 +277,7 @@ def list_schemas(_w, catalog, user_key):
 @st.cache_data(show_spinner=False, ttl=300)
 def list_tables(_w, catalog, schema, user_key):
     try:
-        df = _w.statement_execution.execute(
+        df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement=(
                 f"SELECT table_name FROM `{catalog}`.information_schema.tables "
@@ -309,7 +309,7 @@ def _get_warehouse_id(w):
 def get_existing_tags(_w, catalog, schema, table, user_key):
     try:
         results = {}
-        df = _w.statement_execution.execute(
+        df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement=(
                 f"SELECT tag_name, tag_value FROM `{catalog}`.information_schema.table_tags "
@@ -923,7 +923,7 @@ def get_catalog_tags_report(_w, catalog, user_key):
     if not catalog:
         return pd.DataFrame(columns=["tag_name", "tag_value"])
     try:
-        df = _w.statement_execution.execute(
+        df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement=f"SELECT tag_name, tag_value FROM `{catalog}`.information_schema.catalog_tags ORDER BY tag_name",
         )
@@ -938,7 +938,7 @@ def get_schema_tags_report(_w, catalog, schema, user_key):
     if not (catalog and schema):
         return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
     try:
-        df = _w.statement_execution.execute(
+        df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement=(
                 f"SELECT schema_name, tag_name, tag_value FROM `{catalog}`.information_schema.schema_tags "
@@ -959,7 +959,7 @@ def get_table_tags_report(_w, catalog, schema, table, user_key):
         where = f"WHERE schema_name = '{_sql_escape(schema)}'"
         if table:
             where += f" AND table_name = '{_sql_escape(table)}'"
-        df = _w.statement_execution.execute(
+        df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement=f"SELECT schema_name, table_name, tag_name, tag_value FROM `{catalog}`.information_schema.table_tags {where} ORDER BY table_name, tag_name",
         )
@@ -977,7 +977,7 @@ def get_column_tags_report(_w, catalog, schema, table, user_key):
         where = f"WHERE schema_name = '{_sql_escape(schema)}'"
         if table:
             where += f" AND table_name = '{_sql_escape(table)}'"
-        df = _w.statement_execution.execute(
+        df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement=f"SELECT schema_name, table_name, column_name, tag_name, tag_value FROM `{catalog}`.information_schema.column_tags {where} ORDER BY table_name, column_name, tag_name",
         )

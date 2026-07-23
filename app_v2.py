@@ -589,7 +589,12 @@ with tab_matrix:
     action_left, action_right = st.columns([1, 4])
     with action_left:
         if st.button("+ Add tag row", type="primary", use_container_width=True):
-            st.session_state.tag_rows = pd.concat([st.session_state.tag_rows, pd.DataFrame([_blank_row()])], ignore_index=True)
+            new_row = _blank_row()
+            st.session_state.tag_rows = pd.concat([st.session_state.tag_rows, pd.DataFrame([new_row])], ignore_index=True)
+            st.session_state.matrix_search = ""
+            st.session_state.matrix_category = "All categories"
+            st.session_state.matrix_type = "All"
+            st.session_state.expand_row_id = new_row["row_id"]
             st.rerun()
     with action_right:
         st.caption("Open a card to edit the row, use checkboxes for scope, and duplicate rows when patterns repeat.")
@@ -621,7 +626,7 @@ with tab_matrix:
                     row_governance_label = "Governed" if row.get("type") == "governed" else "Ungoverned"
                     summary = f"{row_title} ({row_governance_label}) · {_row_scope_label(row)} · {row_completion_pct}% complete"
 
-                    with st.expander(summary, expanded=False):
+                    with st.expander(summary, expanded=(row_id == st.session_state.get("expand_row_id"))):
                         col_main, col_meta = st.columns([3, 2])
                         with col_main:
                             matrix_df.at[idx, "category"] = st.text_input("Category", value=str(row.get("category", "")), key=f"row_{row_id}_category")

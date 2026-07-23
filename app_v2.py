@@ -248,7 +248,8 @@ def get_workspace_client():
 def list_catalogs(_w, user_key):
     try:
         return [c.name for c in _w.catalogs.list() if c.name]
-    except Exception:
+    except Exception as e:
+        print(f"[tag-strategy-app] list_catalogs error: {e}")
         return []
 
 
@@ -256,7 +257,8 @@ def list_catalogs(_w, user_key):
 def list_schemas(_w, catalog, user_key):
     try:
         return [s.name for s in _w.schemas.list(catalog_name=catalog) if s.name]
-    except Exception:
+    except Exception as e:
+        print(f"[tag-strategy-app] list_schemas error: {e}")
         return []
 
 
@@ -264,7 +266,8 @@ def list_schemas(_w, catalog, user_key):
 def list_tables(_w, catalog, schema, user_key):
     try:
         return [t.name for t in _w.tables.list(catalog_name=catalog, schema_name=schema) if t.name]
-    except Exception:
+    except Exception as e:
+        print(f"[tag-strategy-app] list_tables error: {e}")
         return []
 
 
@@ -497,7 +500,10 @@ with st.sidebar:
 
     w, user_key, conn_err = get_workspace_client()
     if conn_err:
-        st.error("Not connected — preview mode")
+        print(f"[tag-strategy-app] connection error: {conn_err}")
+        has_token = bool(get_user_access_token())
+        st.error(f"Not connected: {conn_err}")
+        st.caption(f"Forwarded user token present: {has_token}")
         w = None
         user_key = None
     else:

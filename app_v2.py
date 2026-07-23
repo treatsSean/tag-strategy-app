@@ -304,10 +304,6 @@ if "target_schema" not in st.session_state:
     st.session_state.target_schema = ""
 if "target_table" not in st.session_state:
     st.session_state.target_table = ""
-if st.session_state.pop("_reset_matrix_filters", False):
-    st.session_state.matrix_search = ""
-    st.session_state.matrix_category = "All categories"
-    st.session_state.matrix_type = "All"
 
 
 def _governed_rows():
@@ -590,14 +586,15 @@ with tab_matrix:
     with tool_right:
         matrix_type = st.selectbox("Governance", ["All", "governed", "ungoverned"], key="matrix_type")
 
+    def _add_tag_row_callback():
+        new_row = _blank_row()
+        st.session_state.tag_rows = pd.concat([st.session_state.tag_rows, pd.DataFrame([new_row])], ignore_index=True)
+        st.session_state._reset_matrix_filters = True
+        st.session_state.expand_row_id = new_row["row_id"]
+
     action_left, action_right = st.columns([1, 4])
     with action_left:
-        if st.button("+ Add tag row", type="primary", use_container_width=True):
-            new_row = _blank_row()
-            st.session_state.tag_rows = pd.concat([st.session_state.tag_rows, pd.DataFrame([new_row])], ignore_index=True)
-            st.session_state._reset_matrix_filters = True
-            st.session_state.expand_row_id = new_row["row_id"]
-            st.rerun()
+        st.button("+ Add tag row", type="primary", use_container_width=True, on_click=_add_tag_row_callback)
     with action_right:
         st.caption("Open a card to edit the row, use checkboxes for scope, and duplicate rows when patterns repeat.")
 

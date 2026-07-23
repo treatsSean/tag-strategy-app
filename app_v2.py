@@ -86,7 +86,6 @@ def _blank_row():
 
 st.set_page_config(
     page_title="UC Tag Strategy Builder",
-    page_icon="🏷️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -100,8 +99,6 @@ if THEME == "Light":
     _SIDEBAR_BG = "#FFFFFF"    # White
     _SIDEBAR_TEXT = "#0B2026"  # Navy 900
     _SIDEBAR_BORDER = "rgba(11, 32, 38, 0.12)"
-    _HEADER_BG = "#FFFFFF"     # White
-    _HEADER_TEXT = "#0B2026"   # Navy 900
     _FOOTER_BG = "#EEEDE9"     # Oat Medium
     _FOOTER_TEXT = "#0B2026"   # Navy 900
     _CODE_BG = "#EEEDE9"       # Oat Medium
@@ -111,8 +108,6 @@ else:
     _SIDEBAR_BG = "#0B2026"    # Navy 900
     _SIDEBAR_TEXT = "#F9F7F4"  # Oat Light
     _SIDEBAR_BORDER = "rgba(249, 247, 244, 0.18)"
-    _HEADER_BG = "#0B2026"     # Navy 900
-    _HEADER_TEXT = "#F9F7F4"   # Oat Light
     _FOOTER_BG = "#0B2026"     # Navy 900
     _FOOTER_TEXT = "#F9F7F4"   # Oat Light
     _CODE_BG = "#0B2026"       # Navy 900
@@ -137,12 +132,7 @@ st.markdown(f"""
   [data-testid="stSidebar"] * {{ color: {_SIDEBAR_TEXT} !important; }}
 
   [data-testid="stHeader"] {{
-    background: {_HEADER_BG};
-    border-bottom: 3px solid #FF3621;
-  }}
-  [data-testid="stHeader"] * {{
-    color: {_HEADER_TEXT} !important;
-    fill: {_HEADER_TEXT} !important;
+    display: none;
   }}
 
   .stButton > button[kind="primary"] {{
@@ -165,33 +155,18 @@ st.markdown(f"""
     background-color: {_CODE_BG} !important;
   }}
 
-  /* ── Layout density fixes ─────────────────────────────────────── */
   .block-container {{
-    padding-top: 1.75rem !important;
+    padding-top: 1.5rem !important;
     padding-bottom: 2.5rem !important;
   }}
-
-  .db-title-row {{
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding-bottom: 12px;
-    margin-bottom: 8px;
-    border-bottom: 1px solid rgba(11, 32, 38, 0.12);
-  }}
-  .db-title-row .db-title-icon {{ font-size: 26px; line-height: 1; }}
-  .db-title-row .db-title-text {{ font-size: 20px; font-weight: 700; color: #0B2026; line-height: 1.25; }}
-  .db-title-row .db-title-caption {{ font-size: 12.5px; color: rgba(11, 32, 38, 0.62); margin-top: 2px; }}
 
   .db-sidebar-brand {{
     display: flex;
     align-items: center;
-    gap: 8px;
     padding-bottom: 10px;
     margin-bottom: 12px;
     border-bottom: 1px solid {_SIDEBAR_BORDER};
   }}
-  .db-sidebar-brand .db-sidebar-icon {{ font-size: 18px; }}
   .db-sidebar-brand .db-sidebar-name {{ font-size: 13.5px; font-weight: 700; letter-spacing: 0.02em; }}
 
   [data-testid="stSidebar"] .block-container {{
@@ -382,7 +357,7 @@ def generate_sql(catalog="", schema="", table=""):
     if col_rows:
         lines += [
             "-- ── STEP 5: Apply column-level tags ───────────────────────",
-            "-- ⚠ Each column requires its own ALTER TABLE statement.",
+            "-- NOTE: Each column requires its own ALTER TABLE statement.",
             "",
         ]
         for r in col_rows:
@@ -477,24 +452,10 @@ def generate_tf(catalog="", schema="", table=""):
     return "\n".join(lines)
 
 
-st.markdown(
-    """
-    <div class="db-title-row">
-      <div class="db-title-icon">🏷️</div>
-      <div>
-        <div class="db-title-text">Unity Catalog · Tag Strategy Builder</div>
-        <div class="db-title-caption">Design your governed tag taxonomy, then export SQL or Terraform — or apply tags directly to your workspace.</div>
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
 with st.sidebar:
     st.markdown(
         """
         <div class="db-sidebar-brand">
-          <div class="db-sidebar-icon">🏷️</div>
           <div class="db-sidebar-name">TAG STRATEGY BUILDER</div>
         </div>
         """,
@@ -503,16 +464,16 @@ with st.sidebar:
 
     w, conn_err = get_workspace_client()
     if conn_err:
-        st.error("Not connected — preview mode", icon="🔌")
+        st.error("Not connected — preview mode")
         w = None
     else:
         try:
             me = w.current_user.me()
-            st.caption(f"🔌 Connected as **{me.display_name or me.user_name}**")
+            st.caption(f"Connected as **{me.display_name or me.user_name}**")
         except Exception:
-            st.caption("🔌 Connected")
+            st.caption("Connected")
 
-    st.markdown("##### 🎯 Target object")
+    st.markdown("##### Target object")
     st.caption("Populates SQL, Terraform, and Apply tabs.")
     catalogs = list_catalogs(w) if w else []
     catalog_input = st.selectbox("Catalog", [""] + catalogs, key="sb_catalog") if catalogs else st.text_input("Catalog name", key="sb_catalog")
@@ -524,7 +485,7 @@ with st.sidebar:
     table_input = st.selectbox("Table", [""] + tables, key="sb_table") if tables else st.text_input("Table name", key="sb_table")
     st.session_state.target_table = table_input or ""
 
-    st.markdown("##### 📊 Completeness")
+    st.markdown("##### Completeness")
     gov_rows = st.session_state.tag_rows[st.session_state.tag_rows["type"] == "governed"]
     if len(gov_rows):
         filled = (
@@ -539,7 +500,7 @@ with st.sidebar:
     else:
         st.progress(0.0, text="No governed rows")
 
-    if st.button("↺ Reset to defaults", use_container_width=True):
+    if st.button("Reset to defaults", use_container_width=True):
         st.session_state.tag_rows = _with_row_ids(pd.DataFrame(DEFAULT_ROWS, columns=COLUMNS))
         st.rerun()
 
@@ -548,11 +509,11 @@ with st.sidebar:
 
 
 tab_help, tab_matrix, tab_sql, tab_tf, tab_apply = st.tabs([
-    "📘 How to Use",
-    "📋 Tag Matrix",
-    "⚡ SQL — Apply Tags",
-    "🏗 Terraform HCL",
-    "🚀 Apply to Workspace",
+    "How to Use",
+    "Tag Matrix",
+    "SQL — Apply Tags",
+    "Terraform HCL",
+    "Apply to Workspace",
 ])
 
 with tab_help:
@@ -588,12 +549,11 @@ with tab_matrix:
     with info_col:
         st.info(
             "Use governed tags for centralized, policy-backed definitions. Use ungoverned tags for flexible practitioner annotations.",
-            icon="💡",
         )
     with warn_col:
         missing_vals = gov_rows[gov_rows["values"].astype(str).str.strip() == ""]
         if not missing_vals.empty:
-            st.warning(f"{len(missing_vals)} governed tag(s) are missing allowed values.", icon="⚠️")
+            st.warning(f"{len(missing_vals)} governed tag(s) are missing allowed values.")
 
     matrix_df = st.session_state.tag_rows.copy()
     total_rows = len(matrix_df)
@@ -648,8 +608,8 @@ with tab_matrix:
                     row_key = str(row.get("key", "")).strip()
                     row_title = row_key or str(row.get("category", "")).strip() or f"Tag row {idx + 1}"
                     row_completion_pct = int(_row_completion(row) * 100)
-                    row_marker = "🔒" if row.get("type") == "governed" else "✏️"
-                    summary = f"{row_marker} {row_title} · {_row_scope_label(row)} · {row_completion_pct}% complete"
+                    row_governance_label = "Governed" if row.get("type") == "governed" else "Ungoverned"
+                    summary = f"{row_title} ({row_governance_label}) · {_row_scope_label(row)} · {row_completion_pct}% complete"
 
                     with st.expander(summary, expanded=False):
                         col_main, col_meta = st.columns([3, 2])
@@ -727,36 +687,36 @@ with tab_sql:
     sch = st.session_state.target_schema
     tbl = st.session_state.target_table
     if not any([cat, sch, tbl]):
-        st.info("Select a catalog, schema, and table in the sidebar to populate object names in the SQL.", icon="👈")
+        st.info("Select a catalog, schema, and table in the sidebar to populate object names in the SQL.")
     sql_out = generate_sql(cat, sch, tbl)
     st.code(sql_out, language="sql")
-    st.download_button("⬇ Download SQL", sql_out, file_name="tag_strategy.sql", mime="text/plain", type="primary")
+    st.download_button("Download SQL", sql_out, file_name="tag_strategy.sql", mime="text/plain", type="primary")
 
 with tab_tf:
     st.markdown("#### Terraform HCL — Declarative Tag Management")
     st.caption("Resource blocks for the `databricks/databricks` provider.")
-    st.warning("Verify `databricks_tag` resource availability and tag arguments against your provider version before applying.", icon="⚠️")
+    st.warning("Verify `databricks_tag` resource availability and tag arguments against your provider version before applying.")
     cat = st.session_state.target_catalog
     sch = st.session_state.target_schema
     tbl = st.session_state.target_table
     tf_out = generate_tf(cat, sch, tbl)
     st.code(tf_out, language="hcl")
-    st.download_button("⬇ Download HCL", tf_out, file_name="tag_strategy.tf", mime="text/plain", type="primary")
+    st.download_button("Download HCL", tf_out, file_name="tag_strategy.tf", mime="text/plain", type="primary")
 
 with tab_apply:
     st.markdown("#### Apply Tags Directly to Your Workspace")
     if not w:
-        st.error("No workspace connection available. Deploy this as a Databricks App for live tag application.", icon="🔌")
+        st.error("No workspace connection available. Deploy this as a Databricks App for live tag application.")
     else:
         cat = st.session_state.target_catalog
         sch = st.session_state.target_schema
         tbl = st.session_state.target_table
         if not cat:
-            st.info("Select a target catalog in the sidebar to apply tags.", icon="👈")
+            st.info("Select a target catalog in the sidebar to apply tags.")
         else:
             st.markdown(f"**Target:** `{'.'.join(filter(None, [cat, sch, tbl]))}`")
             if tbl:
-                with st.expander("🔍 View existing tags on this table", expanded=False):
+                with st.expander("View existing tags on this table", expanded=False):
                     existing = get_existing_tags(w, cat, sch, tbl)
                     if existing:
                         st.dataframe(pd.DataFrame(list(existing.items()), columns=["Tag Key", "Current Value"]), use_container_width=True, hide_index=True)
@@ -792,7 +752,7 @@ with tab_apply:
                         best_scope = "schema"
                     elif cat and "catalog" in scopes:
                         best_scope = "catalog"
-                    st.caption(f"→ will apply to **{best_scope}**" if best_scope else "")
+                    st.caption(f"Applies to **{best_scope}**" if best_scope else "")
                 if apply and chosen_val and best_scope:
                     assignments[row["key"]] = (chosen_val, best_scope)
 
@@ -812,7 +772,7 @@ with tab_apply:
                 st.code("\n".join(preview_lines), language="sql")
                 c1, c2 = st.columns([2, 5])
                 with c1:
-                    apply_btn = st.button("🚀 Apply tags now", type="primary", use_container_width=True)
+                    apply_btn = st.button("Apply tags now", type="primary", use_container_width=True)
                 with c2:
                     st.caption("Requires `APPLY TAG` on the object plus the required Unity Catalog permissions.")
                 if apply_btn:
@@ -824,18 +784,18 @@ with tab_apply:
                         for stmt in preview_lines:
                             try:
                                 w.statement_execution.execute_sync(warehouse_id=wh_id, statement=stmt)
-                                results.append(("✅", stmt))
+                                results.append(("ok", stmt))
                             except Exception as e:
-                                results.append(("❌", f"{stmt}\n   Error: {e}"))
+                                results.append(("error", f"{stmt}\n   Error: {e}"))
                         get_existing_tags.clear()
-                        failures = sum(1 for icon, _ in results if icon == "❌")
-                        successes = sum(1 for icon, _ in results if icon == "✅")
+                        failures = sum(1 for status, _ in results if status == "error")
+                        successes = sum(1 for status, _ in results if status == "ok")
                         if failures == 0:
-                            st.success(f"✅ Applied {successes} tag(s) successfully.")
+                            st.success(f"Applied {successes} tag(s) successfully.")
                         else:
                             st.warning(f"Applied {successes} tag(s). {failures} failed:")
-                            for icon, msg in results:
-                                if icon == "❌":
+                            for status, msg in results:
+                                if status == "error":
                                     st.error(msg)
             else:
                 st.caption("Select at least one tag above to preview the SQL before applying.")

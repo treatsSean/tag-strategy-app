@@ -247,7 +247,13 @@ def get_workspace_client():
 @st.cache_data(show_spinner=False, ttl=300)
 def list_catalogs(_w, user_key):
     try:
-        return [c.name for c in _w.catalogs.list() if c.name]
+        df = _w.statement_execution.execute(
+            warehouse_id=_get_warehouse_id(_w),
+            statement="SHOW CATALOGS",
+        )
+        if df and df.result and df.result.data_array:
+            return sorted(row[0] for row in df.result.data_array if row and row[0])
+        return []
     except Exception as e:
         print(f"[tag-strategy-app] list_catalogs error: {e}")
         return []
@@ -256,7 +262,13 @@ def list_catalogs(_w, user_key):
 @st.cache_data(show_spinner=False, ttl=300)
 def list_schemas(_w, catalog, user_key):
     try:
-        return [s.name for s in _w.schemas.list(catalog_name=catalog) if s.name]
+        df = _w.statement_execution.execute(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name FROM `{catalog}`.information_schema.schemata",
+        )
+        if df and df.result and df.result.data_array:
+            return sorted(row[0] for row in df.result.data_array if row and row[0])
+        return []
     except Exception as e:
         print(f"[tag-strategy-app] list_schemas error: {e}")
         return []
@@ -265,7 +277,16 @@ def list_schemas(_w, catalog, user_key):
 @st.cache_data(show_spinner=False, ttl=300)
 def list_tables(_w, catalog, schema, user_key):
     try:
-        return [t.name for t in _w.tables.list(catalog_name=catalog, schema_name=schema) if t.name]
+        df = _w.statement_execution.execute(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=(
+                f"SELECT table_name FROM `{catalog}`.information_schema.tables "
+                f"WHERE table_schema='{schema}'"
+            ),
+        )
+        if df and df.result and df.result.data_array:
+            return sorted(row[0] for row in df.result.data_array if row and row[0])
+        return []
     except Exception as e:
         print(f"[tag-strategy-app] list_tables error: {e}")
         return []

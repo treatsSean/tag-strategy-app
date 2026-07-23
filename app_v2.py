@@ -497,7 +497,10 @@ with st.sidebar:
 
     w, user_key, conn_err = get_workspace_client()
     if conn_err:
-        st.error("Not connected — preview mode")
+        print(f"[tag-strategy-app] connection error: {conn_err}")
+        has_token = bool(get_user_access_token())
+        st.error(f"Not connected: {conn_err}")
+        st.caption(f"Forwarded user token present: {has_token}")
         w = None
         user_key = None
     else:

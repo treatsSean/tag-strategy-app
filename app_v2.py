@@ -284,6 +284,75 @@ def get_existing_tags(_w, catalog, schema, table):
         return {}
 
 
+@st.cache_data(show_spinner=False, ttl=60)
+def get_catalog_tags_report(_w, catalog):
+    if not catalog:
+        return pd.DataFrame(columns=["tag_name", "tag_value"])
+    try:
+        df = _w.statement_execution.execute(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT tag_name, tag_value FROM `{catalog}`.information_schema.catalog_tags ORDER BY tag_name",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_schema_tags_report(_w, catalog, schema):
+    if not (catalog and schema):
+        return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
+    try:
+        df = _w.statement_execution.execute(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=(
+                f"SELECT schema_name, tag_name, tag_value FROM `{catalog}`.information_schema.schema_tags "
+                f"WHERE schema_name = '{_sql_escape(schema)}' ORDER BY tag_name"
+            ),
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_table_tags_report(_w, catalog, schema, table):
+    if not (catalog and schema):
+        return pd.DataFrame(columns=["schema_name", "table_name", "tag_name", "tag_value"])
+    try:
+        where = f"WHERE schema_name = '{_sql_escape(schema)}'"
+        if table:
+            where += f" AND table_name = '{_sql_escape(table)}'"
+        df = _w.statement_execution.execute(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name, table_name, tag_name, tag_value FROM `{catalog}`.information_schema.table_tags {where} ORDER BY table_name, tag_name",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "table_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "table_name", "tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_column_tags_report(_w, catalog, schema, table):
+    if not (catalog and schema):
+        return pd.DataFrame(columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
+    try:
+        where = f"WHERE schema_name = '{_sql_escape(schema)}'"
+        if table:
+            where += f" AND table_name = '{_sql_escape(table)}'"
+        df = _w.statement_execution.execute(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name, table_name, column_name, tag_name, tag_value FROM `{catalog}`.information_schema.column_tags {where} ORDER BY table_name, column_name, tag_name",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
+
+
 DEFAULT_ROWS = [
     {"category": "Classification / Sensitivity", "desc": "Overall risk level. Primary signal for access control policies.", "type": "governed", "key": "sensitivity_level", "values": "public, sensitive, confidential, restricted", "creates": "Central governance", "assigns": "Stewards / service principals", "automation": "Audit & review candidates", "owner": "", **_scope_flags("table", "view")},
     {"category": "PII Classification", "desc": "Column-level evidence of specific personal data types.", "type": "governed", "key": "pii", "values": "ssn, email, phone, name, dob, address, ip_address", "creates": "Central governance", "assigns": "Automation / stewards", "automation": "Auto-detect candidates", "owner": "", **_scope_flags("column")},
@@ -875,6 +944,76 @@ with tab_apply:
                                     st.error(msg)
             else:
                 st.caption("Select at least one tag above to preview the SQL before applying.")
+
+with tab_report:
+    st.markdown("#### Tag Report")
+    st.caption("Live tags currently applied in Unity Catalog, scoped to the Catalog / Schema / Table selected in the sidebar.")
+    cat = st.session_state.target_catalog
+    sch = st.session_state.target_schema
+    tbl = st.session_state.target_table
+    if not w:
+        st.error("No workspace connection available. Deploy this as a Databricks App to query live tags.")
+    elif not cat:
+        st.info("Select at least a catalog in the sidebar to run a tag report.")
+    else:
+        scope_label = ".".join(filter(None, [cat, sch, tbl]))
+        st.markdown(f"**Scope:** `{scope_label}`")
+        if st.button("Refresh report"):
+            get_catalog_tags_report.clear()
+            get_schema_tags_report.clear()
+            get_table_tags_report.clear()
+            get_column_tags_report.clear()
+            st.rerun()
+
+        report_frames = []
+
+        cat_tags_df = get_catalog_tags_report(w, cat)
+        st.markdown(f"##### Catalog-level tags — `{cat}`")
+        if cat_tags_df.empty:
+            st.caption("No catalog-level tags found.")
+        else:
+            st.dataframe(cat_tags_df, use_container_width=True, hide_index=True)
+            tagged = cat_tags_df.copy()
+            tagged["level"] = "catalog"
+            report_frames.append(tagged)
+
+        if sch:
+            sch_tags_df = get_schema_tags_report(w, cat, sch)
+            st.markdown(f"##### Schema-level tags — `{cat}.{sch}`")
+            if sch_tags_df.empty:
+                st.caption("No schema-level tags found.")
+            else:
+                st.dataframe(sch_tags_df, use_container_width=True, hide_index=True)
+                tagged = sch_tags_df.copy()
+                tagged["level"] = "schema"
+                report_frames.append(tagged)
+
+            tbl_tags_df = get_table_tags_report(w, cat, sch, tbl)
+            table_scope = f"{cat}.{sch}.{tbl}" if tbl else f"{cat}.{sch} (all tables)"
+            st.markdown(f"##### Table-level tags — `{table_scope}`")
+            if tbl_tags_df.empty:
+                st.caption("No table-level tags found.")
+            else:
+                st.dataframe(tbl_tags_df, use_container_width=True, hide_index=True)
+                tagged = tbl_tags_df.copy()
+                tagged["level"] = "table"
+                report_frames.append(tagged)
+
+            col_tags_df = get_column_tags_report(w, cat, sch, tbl)
+            st.markdown(f"##### Column-level tags — `{table_scope}`")
+            if col_tags_df.empty:
+                st.caption("No column-level tags found.")
+            else:
+                st.dataframe(col_tags_df, use_container_width=True, hide_index=True)
+                tagged = col_tags_df.copy()
+                tagged["level"] = "column"
+                report_frames.append(tagged)
+        else:
+            st.caption("Select a schema in the sidebar to include schema, table, and column-level tags in the report.")
+
+        if report_frames:
+            report_df = pd.concat(report_frames, ignore_index=True)
+            st.download_button("Download report as CSV", report_df.to_csv(index=False), file_name="tag_report.csv", mime="text/csv")
 
 st.divider()
 st.markdown(

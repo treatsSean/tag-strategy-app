@@ -586,17 +586,72 @@ with tab_matrix:
     with tool_right:
         matrix_type = st.selectbox("Governance", ["All", "governed", "ungoverned"], key="matrix_type")
 
-    def _add_tag_row_callback():
-        new_row = _blank_row()
+    def _start_draft_row_callback():
+        st.session_state.drafting_new_row = True
+        st.session_state.draft_nonce = st.session_state.get("draft_nonce", 0) + 1
+
+    def _commit_draft_row_callback():
+        nonce = st.session_state.get("draft_nonce", 0)
+        new_row = {
+            "category": (st.session_state.get(f"draft_category_{nonce}", "") or "").strip() or "New category",
+            "desc": st.session_state.get(f"draft_desc_{nonce}", ""),
+            "type": st.session_state.get(f"draft_type_{nonce}", "governed"),
+            "key": st.session_state.get(f"draft_key_{nonce}", ""),
+            "values": st.session_state.get(f"draft_values_{nonce}", ""),
+            **{f"scope_{s}": st.session_state.get(f"draft_scope_{s}_{nonce}", False) for s in SCOPE_OPTIONS},
+            "creates": st.session_state.get(f"draft_creates_{nonce}", CREATE_OPTIONS[0]),
+            "assigns": st.session_state.get(f"draft_assigns_{nonce}", ASSIGN_OPTIONS[0]),
+            "automation": st.session_state.get(f"draft_automation_{nonce}", AUTOMATION_OPTIONS[0]),
+            "owner": st.session_state.get(f"draft_owner_{nonce}", ""),
+            "row_id": st.session_state.next_row_id,
+        }
+        st.session_state.next_row_id += 1
         st.session_state.tag_rows = pd.concat([st.session_state.tag_rows, pd.DataFrame([new_row])], ignore_index=True)
+        st.session_state.drafting_new_row = False
         st.session_state._reset_matrix_filters = True
         st.session_state.expand_row_id = new_row["row_id"]
 
+    def _discard_draft_row_callback():
+        st.session_state.drafting_new_row = False
+
     action_left, action_right = st.columns([1, 4])
-    with action_left:
-        st.button("+ Add tag row", type="primary", use_container_width=True, on_click=_add_tag_row_callback)
-    with action_right:
-        st.caption("Open a card to edit the row, use checkboxes for scope, and duplicate rows when patterns repeat.")
+    if not st.session_state.get("drafting_new_row"):
+        with action_left:
+            st.button("+ Add tag row", type="primary", use_container_width=True, on_click=_start_draft_row_callback)
+        with action_right:
+            st.caption("Open a card to edit the row, use checkboxes for scope, and duplicate rows when patterns repeat.")
+    else:
+        with action_left:
+            st.caption("Finish or discard the draft below to continue.")
+
+    if st.session_state.get("drafting_new_row"):
+        draft_nonce = st.session_state.get("draft_nonce", 0)
+        with st.container(border=True):
+            st.markdown("**New tag draft** — fill in all fields, then add it to the matrix")
+            draft_col_main, draft_col_meta = st.columns([3, 2])
+            with draft_col_main:
+                st.text_input("Category", key=f"draft_category_{draft_nonce}", placeholder="e.g. Classification / Sensitivity")
+                st.text_area("Description", key=f"draft_desc_{draft_nonce}", height=90)
+                st.text_input("Tag key (snake_case)", key=f"draft_key_{draft_nonce}", placeholder="e.g. sensitivity_level")
+                st.text_input("Allowed values (comma-separated)", key=f"draft_values_{draft_nonce}", placeholder="e.g. public, sensitive, confidential")
+            with draft_col_meta:
+                st.selectbox("Governance", ["governed", "ungoverned"], key=f"draft_type_{draft_nonce}")
+                st.selectbox("Who creates", CREATE_OPTIONS, key=f"draft_creates_{draft_nonce}")
+                st.selectbox("Who assigns", ASSIGN_OPTIONS, key=f"draft_assigns_{draft_nonce}")
+                st.selectbox("Automation", AUTOMATION_OPTIONS, key=f"draft_automation_{draft_nonce}")
+                st.text_input("Owner / DRI", key=f"draft_owner_{draft_nonce}", placeholder="e.g. Data Governance Council")
+
+            st.markdown("**Scope**")
+            draft_scope_cols = st.columns(len(SCOPE_OPTIONS))
+            for scope_name, scope_col in zip(SCOPE_OPTIONS, draft_scope_cols):
+                with scope_col:
+                    st.checkbox(scope_name.title(), value=(scope_name == "table"), key=f"draft_scope_{scope_name}_{draft_nonce}")
+
+            draft_act1, draft_act2, draft_act3 = st.columns([1, 1, 3])
+            with draft_act1:
+                st.button("Add Row to Category", type="primary", use_container_width=True, on_click=_commit_draft_row_callback)
+            with draft_act2:
+                st.button("Discard", use_container_width=True, on_click=_discard_draft_row_callback)
 
     search_text = matrix_search.strip().lower()
     grouped_rows = {}

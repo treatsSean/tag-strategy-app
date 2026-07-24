@@ -33,6 +33,11 @@ AUTOMATION_OPTIONS = [
 ]
 
 
+def _ident_escape(s):
+    """Escape a value for safe embedding inside a backtick-quoted SQL identifier."""
+    return str(s).replace("`", "``")
+
+
 def _scope_flags(*active):
     return {f"scope_{s}": (s in active) for s in SCOPE_OPTIONS}
 
@@ -264,7 +269,7 @@ def list_schemas(_w, catalog, user_key):
     try:
         df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT schema_name FROM `{catalog}`.information_schema.schemata",
+            statement=f"SELECT schema_name FROM `{_ident_escape(catalog)}`.information_schema.schemata",
         )
         if df and df.result and df.result.data_array:
             return sorted(row[0] for row in df.result.data_array if row and row[0])
@@ -280,8 +285,8 @@ def list_tables(_w, catalog, schema, user_key):
         df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement=(
-                f"SELECT table_name FROM `{catalog}`.information_schema.tables "
-                f"WHERE table_schema='{schema}'"
+                f"SELECT table_name FROM `{_ident_escape(catalog)}`.information_schema.tables "
+                f"WHERE table_schema='{_sql_escape(schema)}'"
             ),
         )
         if df and df.result and df.result.data_array:
@@ -312,8 +317,8 @@ def get_existing_tags(_w, catalog, schema, table, user_key):
         df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement=(
-                f"SELECT tag_name, tag_value FROM `{catalog}`.information_schema.table_tags "
-                f"WHERE schema_name='{schema}' AND table_name='{table}'"
+                f"SELECT tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.table_tags "
+                f"WHERE schema_name='{_sql_escape(schema)}' AND table_name='{_sql_escape(table)}'"
             ),
         )
         if df and df.result and df.result.data_array:
@@ -523,7 +528,7 @@ with st.sidebar:
     if conn_err:
         print(f"[tag-strategy-app] connection error: {conn_err}")
         has_token = bool(get_user_access_token())
-        st.error(f"Not connected: {conn_err}")
+        st.error("Not connected. Check your workspace connection and try again.")
         st.caption(f"Forwarded user token present: {has_token}")
         w = None
         user_key = None
@@ -531,7 +536,7 @@ with st.sidebar:
         st.caption(f"Connected as **{user_key}**")
         st.caption("Runs with your own Unity Catalog permissions (user authorization) — you'll only ever see what you already have access to.")
 
-    st.markdown("##### Target object")
+    st.markdown("##### Target")
     st.caption("Populates SQL, Terraform, and Apply tabs.")
     catalogs = list_catalogs(w, user_key) if w else []
     catalog_input = st.selectbox("Catalog", [""] + catalogs, key="sb_catalog") if catalogs else st.text_input("Catalog name", key="sb_catalog")
@@ -569,10 +574,10 @@ with st.sidebar:
 tab_help, tab_matrix, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
     "How to Use",
     "Tag Matrix",
-    "SQL — Apply Tags",
+    "SQL — apply tags",
     "Terraform HCL",
-    "Apply to Workspace",
-    "Tag Report",
+    "Apply to workspace",
+    "Tag report",
 ])
 
 with tab_help:
@@ -698,7 +703,7 @@ with tab_matrix:
 
             draft_act1, draft_act2, draft_act3 = st.columns([1, 1, 3])
             with draft_act1:
-                st.button("Add Row to Category", type="primary", use_container_width=True, on_click=_commit_draft_row_callback)
+                st.button("Add row", type="primary", use_container_width=True, on_click=_commit_draft_row_callback)
             with draft_act2:
                 st.button("Discard", use_container_width=True, on_click=_discard_draft_row_callback)
 
@@ -799,7 +804,7 @@ with tab_matrix:
     )
 
 with tab_sql:
-    st.markdown("#### SQL — Apply Tags to Unity Catalog")
+    st.markdown("#### SQL — apply tags to Unity Catalog")
     st.caption("Generated from your matrix. Run in a Databricks SQL editor or notebook (`%sql`).")
     cat = st.session_state.target_catalog
     sch = st.session_state.target_schema
@@ -811,7 +816,7 @@ with tab_sql:
     st.download_button("Download SQL", sql_out, file_name="tag_strategy.sql", mime="text/plain", type="primary")
 
 with tab_tf:
-    st.markdown("#### Terraform HCL — Declarative Tag Management")
+    st.markdown("#### Terraform HCL — declarative tag management")
     st.caption("Resource blocks for the `databricks/databricks` provider.")
     st.warning("Verify `databricks_tag` resource availability and tag arguments against your provider version before applying.")
     cat = st.session_state.target_catalog
@@ -822,7 +827,7 @@ with tab_tf:
     st.download_button("Download HCL", tf_out, file_name="tag_strategy.tf", mime="text/plain", type="primary")
 
 with tab_apply:
-    st.markdown("#### Apply Tags Directly to Your Workspace")
+    st.markdown("#### Apply tags to your workspace")
     if not w:
         st.error("No workspace connection available. Deploy this as a Databricks App for live tag application.")
     else:
@@ -879,13 +884,13 @@ with tab_apply:
                 preview_lines = []
                 for key, (val, scope) in assignments.items():
                     if scope == "table":
-                        obj_ref = ".".join(filter(None, [cat, sch, tbl]))
+                        obj_ref = ".".join(_ident_escape(p) for p in filter(None, [cat, sch, tbl]))
                         preview_lines.append(f"ALTER TABLE `{obj_ref}` SET TAGS ('{_sql_escape(key)}' = '{_sql_escape(val)}');")
                     elif scope == "schema":
-                        obj_ref = ".".join(filter(None, [cat, sch]))
-                        preview_lines.append(f"ALTER SCHEMA `{obj_ref}` SET TAGS ('{key}' = '{val}');")
+                        obj_ref = ".".join(_ident_escape(p) for p in filter(None, [cat, sch]))
+                        preview_lines.append(f"ALTER SCHEMA `{obj_ref}` SET TAGS ('{_sql_escape(key)}' = '{_sql_escape(val)}');")
                     elif scope == "catalog":
-                        preview_lines.append(f"ALTER CATALOG `{cat}` SET TAGS ('{key}' = '{val}');")
+                        preview_lines.append(f"ALTER CATALOG `{_ident_escape(cat)}` SET TAGS ('{_sql_escape(key)}' = '{_sql_escape(val)}');")
                 st.markdown("**Preview — SQL that will be executed:**")
                 st.code("\n".join(preview_lines), language="sql")
                 c1, c2 = st.columns([2, 5])
@@ -901,7 +906,7 @@ with tab_apply:
                         results = []
                         for stmt in preview_lines:
                             try:
-                                w.statement_execution.execute_sync(warehouse_id=wh_id, statement=stmt)
+                                w.statement_execution.execute_statement(warehouse_id=wh_id, statement=stmt)
                                 results.append(("ok", stmt))
                             except Exception as e:
                                 results.append(("error", f"{stmt}\n   Error: {e}"))
@@ -909,9 +914,9 @@ with tab_apply:
                         failures = sum(1 for status, _ in results if status == "error")
                         successes = sum(1 for status, _ in results if status == "ok")
                         if failures == 0:
-                            st.success(f"Applied {successes} tag(s) successfully.")
+                            st.success(f"Applied {successes} tag(s).")
                         else:
-                            st.warning(f"Applied {successes} tag(s). {failures} failed:")
+                            st.warning(f"Applied {successes} tag(s), {failures} failed.")
                             for status, msg in results:
                                 if status == "error":
                                     st.error(msg)
@@ -925,7 +930,7 @@ def get_catalog_tags_report(_w, catalog, user_key):
     try:
         df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT tag_name, tag_value FROM `{catalog}`.information_schema.catalog_tags ORDER BY tag_name",
+            statement=f"SELECT tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.catalog_tags ORDER BY tag_name",
         )
         rows = df.result.data_array if df and df.result and df.result.data_array else []
         return pd.DataFrame(rows, columns=["tag_name", "tag_value"])
@@ -941,7 +946,7 @@ def get_schema_tags_report(_w, catalog, schema, user_key):
         df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
             statement=(
-                f"SELECT schema_name, tag_name, tag_value FROM `{catalog}`.information_schema.schema_tags "
+                f"SELECT schema_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.schema_tags "
                 f"WHERE schema_name = '{_sql_escape(schema)}' ORDER BY tag_name"
             ),
         )
@@ -961,7 +966,7 @@ def get_table_tags_report(_w, catalog, schema, table, user_key):
             where += f" AND table_name = '{_sql_escape(table)}'"
         df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT schema_name, table_name, tag_name, tag_value FROM `{catalog}`.information_schema.table_tags {where} ORDER BY table_name, tag_name",
+            statement=f"SELECT schema_name, table_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.table_tags {where} ORDER BY table_name, tag_name",
         )
         rows = df.result.data_array if df and df.result and df.result.data_array else []
         return pd.DataFrame(rows, columns=["schema_name", "table_name", "tag_name", "tag_value"])
@@ -979,7 +984,7 @@ def get_column_tags_report(_w, catalog, schema, table, user_key):
             where += f" AND table_name = '{_sql_escape(table)}'"
         df = _w.statement_execution.execute_statement(
             warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT schema_name, table_name, column_name, tag_name, tag_value FROM `{catalog}`.information_schema.column_tags {where} ORDER BY table_name, column_name, tag_name",
+            statement=f"SELECT schema_name, table_name, column_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.column_tags {where} ORDER BY table_name, column_name, tag_name",
         )
         rows = df.result.data_array if df and df.result and df.result.data_array else []
         return pd.DataFrame(rows, columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
@@ -988,7 +993,7 @@ def get_column_tags_report(_w, catalog, schema, table, user_key):
 
 
 with tab_report:
-    st.markdown("#### Tag Report")
+    st.markdown("#### Tag report")
     st.caption("Live tags currently applied in Unity Catalog, scoped to the Catalog / Schema / Table selected in the sidebar.")
     cat = st.session_state.target_catalog
     sch = st.session_state.target_schema

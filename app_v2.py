@@ -3,11 +3,19 @@ Unity Catalog Tag Strategy Builder
 Databricks App — Streamlit + Databricks SDK
 """
 
+import json
+import io
 import pandas as pd
 import streamlit as st
 from datetime import date
 
-from tag_engine import validate_taxonomy, recommend_for_rows, build_apply_plan, classify_tag_domain
+from tag_engine import (
+    validate_taxonomy,
+    recommend_for_rows,
+    build_apply_plan,
+    classify_tag_domain,
+    build_import_plan,
+)
 
 SCOPE_OPTIONS = ["catalog", "schema", "table", "view", "column"]
 SCOPE_COLS = [f"scope_{s}" for s in SCOPE_OPTIONS]
@@ -626,10 +634,11 @@ with st.sidebar:
     st.radio("Theme", ["Dark Header", "Light"], key="theme_mode", horizontal=True)
 
 
-tab_help, tab_matrix, tab_validate, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
+tab_help, tab_matrix, tab_validate, tab_import, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
     "How to Use",
     "Tag Matrix",
     "Validate",
+    "Import",
     "SQL — apply tags",
     "Terraform HCL",
     "Apply to workspace",
@@ -896,6 +905,81 @@ with tab_validate:
         )
     else:
         st.caption("Add tag keys in Tag Matrix to see recommendations here.")
+
+with tab_import:
+    st.markdown("#### Import existing tag mappings")
+    st.caption(
+        "Upload a CSV/JSON file or paste a table mapping catalog/schema/table/column identifiers to "
+        "tag_key/tag_value pairs. We normalize column names, match keys against your Tag Matrix taxonomy, "
+        "and generate a dry-run SQL apply plan — nothing is applied here."
+    )
+
+    _import_method = st.radio("Source", ["Upload file", "Paste table"], horizontal=True, key="import_method")
+    _raw_records = []
+
+    if _import_method == "Upload file":
+        _uploaded = st.file_uploader("CSV or JSON", type=["csv", "json"], key="import_uploader")
+        if _uploaded is not None:
+            try:
+                if _uploaded.name.lower().endswith(".json"):
+                    _parsed = json.load(_uploaded)
+                    _raw_records = _parsed if isinstance(_parsed, list) else [_parsed]
+                else:
+                    _raw_records = pd.read_csv(_uploaded).to_dict("records")
+            except Exception as _e:
+                st.error(f"Could not parse file: {_e}")
+    else:
+        _pasted = st.text_area(
+            "Paste CSV (with header row)",
+            placeholder=(
+                "catalog,schema,table,column,tag_key,tag_value\n"
+                "main,sales,orders,,data_classification,restricted\n"
+                "main,sales,orders,customer_email,data_classification,restricted"
+            ),
+            height=150,
+            key="import_paste",
+        )
+        if _pasted.strip():
+            try:
+                _raw_records = pd.read_csv(io.StringIO(_pasted)).to_dict("records")
+            except Exception as _e:
+                st.error(f"Could not parse pasted table: {_e}")
+
+    if _raw_records:
+        st.caption(f"Parsed {len(_raw_records)} row(s).")
+        _taxonomy_rows = st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records")
+        _import_plan = build_import_plan(_raw_records, _taxonomy_rows)
+
+        _i_errors = [w for w in _import_plan.warnings if w.severity == "error"]
+        _i_warnings = [w for w in _import_plan.warnings if w.severity == "warning"]
+
+        ic1, ic2, ic3 = st.columns(3)
+        ic1.metric("Assignments parsed", len(_import_plan.uc_assignments))
+        ic2.metric("Errors", len(_i_errors))
+        ic3.metric("Warnings", len(_i_warnings))
+
+        if _import_plan.warnings:
+            st.markdown("##### Issues")
+            for _w in _i_errors:
+                st.error(f"**{_w.code}** — {_w.message}" + (f"\n\nFix: {_w.suggested_fix}" if _w.suggested_fix else ""))
+            for _w in _i_warnings:
+                st.warning(f"**{_w.code}** — {_w.message}" + (f"\n\nFix: {_w.suggested_fix}" if _w.suggested_fix else ""))
+        else:
+            st.success("All imported keys matched your taxonomy with no issues.")
+
+        st.markdown("##### Dry-run apply plan (SQL)")
+        st.caption("Review before running. Rows with unresolved errors above are still included — fix or filter them first if you don't want them applied.")
+        _import_sql = "\n\n".join(_import_plan.sql_statements) if _import_plan.sql_statements else "-- No valid assignments parsed."
+        st.code(_import_sql, language="sql")
+        st.download_button(
+            "Download import SQL",
+            data=_import_sql,
+            file_name="bulk_import_tags.sql",
+            mime="text/plain",
+            key="import_sql_dl",
+        )
+    else:
+        st.caption("No rows parsed yet. Upload a file or paste a table above to see the dry-run plan.")
 
 with tab_sql:
     st.markdown("#### SQL — apply tags to Unity Catalog")

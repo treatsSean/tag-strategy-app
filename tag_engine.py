@@ -304,3 +304,135 @@ def build_apply_plan(rows):
             plan.compute_tag_assignments.append(TagAssignment(scope="compute", key=key, value=default_value, source="suggested"))
 
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Bulk import + apply-plan generator (Feature 4)
+# ---------------------------------------------------------------------------
+
+def _ident_escape(s):
+    """Escape a value for safe embedding inside a backtick-quoted SQL identifier."""
+    return str(s).replace("`", "``")
+
+
+def _sql_escape(s):
+    return str(s).replace("'", "''")
+
+
+_IMPORT_COL_ALIASES = {
+    "catalog": ["catalog", "catalog_name"],
+    "schema": ["schema", "schema_name", "database", "db"],
+    "table": ["table", "table_name"],
+    "column": ["column", "column_name", "col"],
+    "key": ["tag_key", "key", "tag_name", "tag"],
+    "value": ["tag_value", "value", "val"],
+}
+
+
+def normalize_import_record(record):
+    """Map a raw imported dict (arbitrary column names) to catalog/schema/table/column/key/value."""
+    out = {"catalog": None, "schema": None, "table": None, "column": None, "key": None, "value": None}
+    lower_map = {}
+    for k, v in record.items():
+        if v is None:
+            continue
+        sv = str(v).strip()
+        if sv == "" or sv.lower() == "nan":
+            continue
+        lower_map[str(k).strip().lower()] = sv
+    for canon, aliases in _IMPORT_COL_ALIASES.items():
+        for alias in aliases:
+            if alias in lower_map:
+                out[canon] = lower_map[alias]
+                break
+    return out
+
+
+def _infer_scope(rec):
+    if rec.get("column"):
+        return "column"
+    if rec.get("table"):
+        return "table"
+    if rec.get("schema"):
+        return "schema"
+    if rec.get("catalog"):
+        return "catalog"
+    return None
+
+
+def build_import_plan(raw_records, taxonomy_rows=None):
+    """Normalize raw bulk-import records, match against taxonomy, and build an ApplyPlan.
+
+    raw_records: list of dicts with arbitrary column names (see normalize_import_record).
+    taxonomy_rows: existing tag_rows (governed + free-form) to match imported keys against.
+    """
+    taxonomy_rows = taxonomy_rows or []
+    taxonomy_by_key = {}
+    for row in taxonomy_rows:
+        k = (row.get("key") or "").strip()
+        if k:
+            taxonomy_by_key[_norm(k)] = row
+
+    plan = ApplyPlan()
+    grouped = {}
+
+    for i, raw in enumerate(raw_records):
+        rec = normalize_import_record(raw)
+        key = rec.get("key")
+        value = rec.get("value")
+        scope = _infer_scope(rec)
+
+        if not key:
+            plan.warnings.append(ValidationIssue(
+                "error", "IMPORT_MISSING_KEY", f"Row {i + 1}: no tag key/tag_name column recognized.",
+                object_ref=str(raw),
+            ))
+            continue
+        if not scope:
+            plan.warnings.append(ValidationIssue(
+                "error", "IMPORT_MISSING_OBJECT",
+                f"Row {i + 1}: no catalog/schema/table/column identifier found for key `{key}`.",
+                object_ref=key,
+            ))
+            continue
+
+        plan.warnings.extend(lint_tag_definition(key, [value] if value else []))
+
+        taxonomy_row = taxonomy_by_key.get(_norm(key))
+        if taxonomy_row is None:
+            plan.warnings.append(ValidationIssue(
+                "warning", "IMPORT_UNMAPPED_KEY",
+                f"`{key}` is not part of your current taxonomy (Tag Matrix).",
+                object_ref=key,
+                suggested_fix="Add it as a row in Tag Matrix, or confirm it should stay ad hoc.",
+            ))
+        else:
+            allowed_values = [v.strip() for v in (taxonomy_row.get("values") or "").split(",") if v.strip()]
+            plan.warnings.extend(lint_value_drift(key, allowed_values, value or ""))
+            defined_scopes = [s for s in ["catalog", "schema", "table", "view", "column"] if taxonomy_row.get(f"scope_{s}")]
+            plan.warnings.extend(lint_assignment_scope(key, defined_scopes, scope))
+
+        plan.uc_assignments.append(TagAssignment(
+            scope=scope, key=key, value=value,
+            catalog=rec.get("catalog"), schema=rec.get("schema"), table=rec.get("table"), column=rec.get("column"),
+            source="imported",
+        ))
+
+        obj_key = (scope, rec.get("catalog"), rec.get("schema"), rec.get("table"), rec.get("column"))
+        grouped.setdefault(obj_key, {})[key] = value
+
+    for (scope, cat, sch, tbl, col), kv in sorted(grouped.items(), key=lambda x: tuple((x[0][i] or "") for i in range(5))):
+        tags_clause = ",\n".join(f"  '{_sql_escape(k)}' = '{_sql_escape(v or '')}'" for k, v in kv.items())
+        if scope == "catalog":
+            plan.sql_statements.append(f"ALTER CATALOG `{_ident_escape(cat)}`\nSET TAGS (\n{tags_clause}\n);")
+        elif scope == "schema":
+            plan.sql_statements.append(f"ALTER SCHEMA `{_ident_escape(cat)}`.`{_ident_escape(sch)}`\nSET TAGS (\n{tags_clause}\n);")
+        elif scope == "table":
+            plan.sql_statements.append(f"ALTER TABLE `{_ident_escape(cat)}`.`{_ident_escape(sch)}`.`{_ident_escape(tbl)}`\nSET TAGS (\n{tags_clause}\n);")
+        elif scope == "column":
+            plan.sql_statements.append(
+                f"ALTER TABLE `{_ident_escape(cat)}`.`{_ident_escape(sch)}`.`{_ident_escape(tbl)}`\n"
+                f"ALTER COLUMN `{_ident_escape(col)}`\nSET TAGS (\n{tags_clause}\n);"
+            )
+
+    return plan

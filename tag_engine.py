@@ -243,3 +243,64 @@ def recommend_for_rows(rows):
             "current_type": row.get("type", ""),
         })
     return out
+
+
+# ---------------------------------------------------------------------------
+# Apply-plan builder (Feature 6 foundation) + cost/governance domain split
+# ---------------------------------------------------------------------------
+
+def classify_tag_domain(key):
+    """Classify a tag key as governance-only, cost-only, or both (Feature 11 seed).
+
+    Used by the SQL/Terraform renderer to decide whether a governed tag also
+    needs a compute/cost-tagging counterpart, since UC tags and compute/cost
+    tags are still separate systems today.
+    """
+    nk = _norm(key)
+    is_cost = any(h in nk for h in _COST_HINTS)
+    is_governance_signal = any(h in nk for h in _COMPLIANCE_HINTS) or any(h in nk for h in _ABAC_HINTS)
+    if is_cost and is_governance_signal:
+        return "both"
+    if is_cost:
+        return "cost"
+    return "governance"
+
+
+def build_apply_plan(rows):
+    """Build an ApplyPlan from taxonomy rows: governed tag defs, UC assignments,
+    compute/cost assignments, and validator warnings, ordered for safe execution.
+
+    `rows` matches the app's tag_rows session-state shape (see validate_taxonomy).
+    """
+    plan = ApplyPlan()
+    plan.warnings = validate_taxonomy(rows)
+
+    for row in rows:
+        key = (row.get("key") or "").strip()
+        if not key or _norm(row.get("type", "")) != "governed":
+            continue
+
+        allowed_values = [v.strip() for v in (row.get("values") or "").split(",") if v.strip()]
+        scopes = [s for s in ["catalog", "schema", "table", "view", "column"] if row.get(f"scope_{s}")]
+        _, rationale = recommend_governance_mode(key, required=True, category=row.get("category", ""))
+
+        plan.governed_tags_to_create.append(TagDefinition(
+            key=key,
+            description=row.get("desc", "") or row.get("category", ""),
+            allowed_values=allowed_values,
+            required=True,
+            governed_recommended=True,
+            scopes=scopes,
+            rationale=rationale,
+        ))
+
+        default_value = allowed_values[0] if allowed_values else None
+        domain = classify_tag_domain(key)
+
+        for s in scopes:
+            plan.uc_assignments.append(TagAssignment(scope=s, key=key, value=default_value, source="suggested"))
+
+        if domain in ("cost", "both"):
+            plan.compute_tag_assignments.append(TagAssignment(scope="compute", key=key, value=default_value, source="suggested"))
+
+    return plan

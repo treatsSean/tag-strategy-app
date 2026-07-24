@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 from datetime import date
 
-from tag_engine import validate_taxonomy, recommend_for_rows
+from tag_engine import validate_taxonomy, recommend_for_rows, build_apply_plan, classify_tag_domain
 
 SCOPE_OPTIONS = ["catalog", "schema", "table", "view", "column"]
 SCOPE_COLS = [f"scope_{s}" for s in SCOPE_OPTIONS]
@@ -391,6 +391,15 @@ def generate_sql(catalog="", schema="", table=""):
         "-- Requires: DBR 13.3+ (ALTER SET TAGS) or DBR 16.1+ (SET TAG ON)",
         "-- ════════════════════════════════════════════════════════════",
         "",
+    ]
+    _plan = build_apply_plan(st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records"))
+    if _plan.warnings:
+        lines += ["-- ── Validator findings (run Validate tab for detail) ──────"]
+        for _issue in _plan.warnings:
+            _icon = "⛔" if _issue.severity == "error" else ("⚠" if _issue.severity == "warning" else "ℹ")
+            lines.append(f"-- {_icon} [{_issue.code}] {_issue.message}")
+        lines.append("")
+    lines += [
         "-- ── STEP 1: Governed tag key reference spec ────────────────",
         "-- Governed tags are created via Catalog Explorer or REST API.",
         "-- API: POST /api/2.1/unity-catalog/tags",
@@ -435,6 +444,22 @@ def generate_sql(catalog="", schema="", table=""):
                 ");",
                 "",
             ]
+    if _plan.compute_tag_assignments:
+        lines += [
+            "-- ── STEP 5.5: Compute / cost tagging (separate system) ────",
+            "-- UC tags do NOT propagate to cluster/warehouse cost tags today.",
+            "-- Apply these the same keys/values via cluster policies, cluster",
+            "-- custom_tags, or your cost-allocation tooling:",
+            "",
+        ]
+        _seen_compute = set()
+        for _a in _plan.compute_tag_assignments:
+            if _a.key in _seen_compute:
+                continue
+            _seen_compute.add(_a.key)
+            lines.append(f"--   {_a.key} = '{_a.value or '<value>'}'  (compute/cost — set outside SQL)")
+        lines.append("")
+
     cat_name = catalog or "<catalog>"
     lines += [
         "-- ── STEP 6: Verify tags were applied ──────────────────────",
@@ -460,6 +485,15 @@ def generate_tf(catalog="", schema="", table=""):
         "# Provider: hashicorp/databricks >= 1.38.0",
         "# ═══════════════════════════════════════════════════════════",
         "",
+    ]
+    _plan = build_apply_plan(st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records"))
+    if _plan.warnings:
+        lines += ["# ── Validator findings (run Validate tab for detail) ──────"]
+        for _issue in _plan.warnings:
+            _icon = "\u26D4" if _issue.severity == "error" else ("\u26A0" if _issue.severity == "warning" else "\u2139")
+            lines.append(f"# {_icon} [{_issue.code}] {_issue.message}")
+        lines.append("")
+    lines += [
         "# ── Governed tag definitions ─────────────────────────────────",
         "",
     ]
@@ -513,6 +547,25 @@ def generate_tf(catalog="", schema="", table=""):
                 "  # }",
             ]
     lines += ["}"]
+
+    if _plan.compute_tag_assignments:
+        lines += [
+            "",
+            "# ── Compute / cost tags (separate system) ─────────────────────",
+            "# UC tags do NOT propagate to cluster/warehouse cost tags today.",
+            "# Duplicate these keys/values on your compute resources, e.g.:",
+            "#",
+            "# resource \"databricks_cluster\" \"example\" {",
+            "#   custom_tags = {",
+        ]
+        _seen_compute = set()
+        for _a in _plan.compute_tag_assignments:
+            if _a.key in _seen_compute:
+                continue
+            _seen_compute.add(_a.key)
+            lines.append(f'#     "{_hcl_escape(_a.key)}" = "{_hcl_escape(_a.value or "<value>")}"')
+        lines += ["#   }", "# }"]
+
     return "\n".join(lines)
 
 

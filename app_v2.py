@@ -7,6 +7,8 @@ import pandas as pd
 import streamlit as st
 from datetime import date
 
+from tag_engine import validate_taxonomy, recommend_for_rows
+
 SCOPE_OPTIONS = ["catalog", "schema", "table", "view", "column"]
 SCOPE_COLS = [f"scope_{s}" for s in SCOPE_OPTIONS]
 CREATE_OPTIONS = ["Central governance", "Domain leads", "Team leads", "Anyone"]
@@ -571,9 +573,10 @@ with st.sidebar:
     st.radio("Theme", ["Dark Header", "Light"], key="theme_mode", horizontal=True)
 
 
-tab_help, tab_matrix, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
+tab_help, tab_matrix, tab_validate, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
     "How to Use",
     "Tag Matrix",
+    "Validate",
     "SQL — apply tags",
     "Terraform HCL",
     "Apply to workspace",
@@ -802,6 +805,44 @@ with tab_matrix:
         height=100,
         label_visibility="collapsed",
     )
+
+with tab_validate:
+    st.markdown("#### Validate your taxonomy")
+    st.caption("Checks run against the rows in Tag Matrix: invalid characters, sensitive values, reserved keys, duplicate semantic keys, high-cardinality keys, and governance-mode fit.")
+
+    _rows = st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records")
+    _issues = validate_taxonomy(_rows)
+    _errors = [i for i in _issues if i.severity == "error"]
+    _warnings = [i for i in _issues if i.severity == "warning"]
+    _infos = [i for i in _issues if i.severity == "info"]
+
+    col_e, col_w, col_i = st.columns(3)
+    col_e.metric("Errors", len(_errors))
+    col_w.metric("Warnings", len(_warnings))
+    col_i.metric("Info", len(_infos))
+
+    if not _issues:
+        st.success("No issues found. Every tag key passes the linter.")
+    else:
+        for issue in _errors:
+            st.error(f"**{issue.code}** — {issue.message}" + (f"\n\nFix: {issue.suggested_fix}" if issue.suggested_fix else ""))
+        for issue in _warnings:
+            st.warning(f"**{issue.code}** — {issue.message}" + (f"\n\nFix: {issue.suggested_fix}" if issue.suggested_fix else ""))
+        for issue in _infos:
+            st.info(f"**{issue.code}** — {issue.message}")
+
+    st.divider()
+    st.markdown("##### Governance-mode recommendations")
+    st.caption("Suggests governed, free-form, or system-managed for each key, based on requiredness, compliance, ABAC, and cost-allocation signals.")
+    _recs = recommend_for_rows(_rows)
+    if _recs:
+        st.dataframe(
+            pd.DataFrame(_recs)[["key", "current_type", "recommended_mode", "rationale"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.caption("Add tag keys in Tag Matrix to see recommendations here.")
 
 with tab_sql:
     st.markdown("#### SQL — apply tags to Unity Catalog")

@@ -15,6 +15,10 @@ from tag_engine import (
     build_apply_plan,
     classify_tag_domain,
     build_import_plan,
+    compute_required_keys,
+    analyze_object_coverage,
+    audit_value_drift,
+    SENSITIVE_COLUMN_NAME_HINTS,
 )
 
 SCOPE_OPTIONS = ["catalog", "schema", "table", "view", "column"]
@@ -634,11 +638,12 @@ with st.sidebar:
     st.radio("Theme", ["Dark Header", "Light"], key="theme_mode", horizontal=True)
 
 
-tab_help, tab_matrix, tab_validate, tab_import, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
+tab_help, tab_matrix, tab_validate, tab_import, tab_audit, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
     "How to Use",
     "Tag Matrix",
     "Validate",
     "Import",
+    "Audit",
     "SQL — apply tags",
     "Terraform HCL",
     "Apply to workspace",
@@ -981,6 +986,131 @@ with tab_import:
     else:
         st.caption("No rows parsed yet. Upload a file or paste a table above to see the dry-run plan.")
 
+with tab_audit:
+    st.markdown("#### Coverage and gap analysis")
+    st.caption(
+        "Audits live Unity Catalog tag state against the required governed tags in Tag Matrix. "
+        "Catalog-wide — scoped to the Catalog selected in the sidebar."
+    )
+    _audit_cat = st.session_state.target_catalog
+    if not w:
+        st.error("No workspace connection available. Deploy this as a Databricks App to run a live audit.")
+    elif not _audit_cat:
+        st.info("Select a catalog in the sidebar to run an audit.")
+    else:
+        if st.button("Refresh audit", key="audit_refresh"):
+            audit_all_tables.clear()
+            audit_all_schema_tags.clear()
+            audit_all_table_tags.clear()
+            audit_all_column_tags.clear()
+            audit_sensitive_columns.clear()
+            get_catalog_tags_report.clear()
+            st.rerun()
+
+        _taxonomy_rows = st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records")
+        _audit_schemas = list_schemas(w, _audit_cat, user_key)
+        _audit_tables_df = audit_all_tables(w, _audit_cat, user_key)
+
+        _req_catalog_keys = compute_required_keys(_taxonomy_rows, "catalog")
+        _catalog_tags_df = get_catalog_tags_report(w, _audit_cat, user_key)
+        _catalog_present = set(_catalog_tags_df["tag_name"]) if not _catalog_tags_df.empty else set()
+        _catalog_missing = [k for k in _req_catalog_keys if k not in _catalog_present]
+
+        _req_schema_keys = compute_required_keys(_taxonomy_rows, "schema")
+        _schema_tags_df = audit_all_schema_tags(w, _audit_cat, user_key)
+        _schema_tag_records = [
+            {"object_id": r["schema_name"], "tag_name": r["tag_name"], "tag_value": r["tag_value"]}
+            for _, r in _schema_tags_df.iterrows()
+        ]
+        _schema_cov = analyze_object_coverage(_audit_schemas, _req_schema_keys, _schema_tag_records) if _req_schema_keys else None
+
+        _req_table_keys = compute_required_keys(_taxonomy_rows, "table")
+        _table_objs = [f"{r['table_schema']}.{r['table_name']}" for _, r in _audit_tables_df.iterrows()]
+        _table_tags_df = audit_all_table_tags(w, _audit_cat, user_key)
+        _table_tag_records = [
+            {"object_id": f"{r['schema_name']}.{r['table_name']}", "tag_name": r["tag_name"], "tag_value": r["tag_value"]}
+            for _, r in _table_tags_df.iterrows()
+        ]
+        _table_cov = analyze_object_coverage(_table_objs, _req_table_keys, _table_tag_records) if _req_table_keys else None
+
+        st.markdown("##### Coverage summary")
+        ac1, ac2, ac3 = st.columns(3)
+        ac1.metric(
+            "Catalog required tags met",
+            f"{len(_req_catalog_keys) - len(_catalog_missing)}/{len(_req_catalog_keys)}" if _req_catalog_keys else "—",
+        )
+        ac2.metric(
+            "Schema coverage",
+            f"{_schema_cov['coverage_pct']}%" if _schema_cov else "—",
+            help=(f"{_schema_cov['fully_covered']}/{_schema_cov['total']} schemas" if _schema_cov else "No required schema-level tags defined."),
+        )
+        ac3.metric(
+            "Table coverage",
+            f"{_table_cov['coverage_pct']}%" if _table_cov else "—",
+            help=(f"{_table_cov['fully_covered']}/{_table_cov['total']} tables" if _table_cov else "No required table-level tags defined."),
+        )
+
+        if _catalog_missing:
+            st.warning(f"Catalog `{_audit_cat}` is missing required tag(s): {', '.join(_catalog_missing)}")
+        elif _req_catalog_keys:
+            st.success(f"Catalog `{_audit_cat}` has all required catalog-level tags.")
+
+        if _schema_cov and _schema_cov["gaps"]:
+            st.markdown("##### Schemas missing required tags")
+            _schema_gap_df = pd.DataFrame(
+                [{"schema": g["object"], "missing_keys": ", ".join(g["missing_keys"])} for g in _schema_cov["gaps"]]
+            )
+            st.dataframe(_schema_gap_df, use_container_width=True, hide_index=True)
+
+        if _table_cov and _table_cov["gaps"]:
+            st.markdown("##### Tables missing required tags")
+            _table_gap_df = pd.DataFrame(
+                [{"table": g["object"], "missing_keys": ", ".join(g["missing_keys"])} for g in _table_cov["gaps"]]
+            )
+            st.dataframe(_table_gap_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download table gaps as CSV",
+                _table_gap_df.to_csv(index=False),
+                file_name=f"{_audit_cat}_table_tag_gaps.csv",
+                mime="text/csv",
+                key="audit_table_gap_dl",
+            )
+
+        st.divider()
+        st.markdown("##### Invalid tag values")
+        st.caption("Live values that fall outside a governed tag's allowed-value set.")
+        _all_tag_records = _schema_tag_records + _table_tag_records
+        _value_issues = audit_value_drift(_all_tag_records, _taxonomy_rows)
+        if _value_issues:
+            for _iss in _value_issues:
+                st.error(f"**{_iss.code}** — `{_iss.object_ref}`: {_iss.message}")
+        else:
+            st.caption("No invalid tag values detected against your taxonomy's allowed-value sets.")
+
+        st.divider()
+        st.markdown("##### Untagged sensitive columns")
+        st.caption(
+            "Heuristic name match (email, ssn, phone, address, dob, tax id, passport, credit card, ip address) "
+            "with no column-level tags applied at all."
+        )
+        _sensitive_df = audit_sensitive_columns(w, _audit_cat, user_key)
+        if _sensitive_df.empty:
+            st.caption("No columns matched sensitive-name heuristics in this catalog.")
+        else:
+            _col_tags_df = audit_all_column_tags(w, _audit_cat, user_key)
+            _tagged_cols = set(
+                zip(_col_tags_df.get("schema_name", []), _col_tags_df.get("table_name", []), _col_tags_df.get("column_name", []))
+            )
+            _untagged_mask = ~_sensitive_df.apply(
+                lambda r: (r["table_schema"], r["table_name"], r["column_name"]) in _tagged_cols, axis=1
+            )
+            _untagged_df = _sensitive_df[_untagged_mask]
+            if _untagged_df.empty:
+                st.success(f"All {len(_sensitive_df)} name-matched sensitive column(s) already carry at least one tag.")
+            else:
+                st.warning(f"{len(_untagged_df)} of {len(_sensitive_df)} name-matched sensitive column(s) have no tags at all.")
+                st.dataframe(_untagged_df, use_container_width=True, hide_index=True)
+
 with tab_sql:
     st.markdown("#### SQL — apply tags to Unity Catalog")
     st.caption("Generated from your matrix. Run in a Databricks SQL editor or notebook (`%sql`).")
@@ -1102,6 +1232,80 @@ with tab_apply:
                 st.caption("Select at least one tag above to preview the SQL before applying.")
 
 @st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=120)
+def audit_all_tables(_w, catalog, user_key):
+    """Catalog-wide table list (schema + table) — the coverage denominator for tables."""
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT table_schema, table_name FROM `{_ident_escape(catalog)}`.information_schema.tables",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["table_schema", "table_name"])
+    except Exception:
+        return pd.DataFrame(columns=["table_schema", "table_name"])
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def audit_all_schema_tags(_w, catalog, user_key):
+    """Catalog-wide schema_tags (no schema filter) for coverage/drift analysis."""
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.schema_tags",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def audit_all_table_tags(_w, catalog, user_key):
+    """Catalog-wide table_tags (no schema filter) for coverage/drift analysis."""
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name, table_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.table_tags",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "table_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "table_name", "tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def audit_all_column_tags(_w, catalog, user_key):
+    """Catalog-wide column_tags (no schema/table filter)."""
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name, table_name, column_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.column_tags",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def audit_sensitive_columns(_w, catalog, user_key):
+    """Catalog-wide columns whose name matches common sensitive-data hints (pushdown-filtered)."""
+    like_clause = " OR ".join(f"lower(column_name) LIKE '%{h}%'" for h in SENSITIVE_COLUMN_NAME_HINTS)
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=(
+                f"SELECT table_schema, table_name, column_name FROM `{_ident_escape(catalog)}`.information_schema.columns "
+                f"WHERE {like_clause}"
+            ),
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["table_schema", "table_name", "column_name"])
+    except Exception:
+        return pd.DataFrame(columns=["table_schema", "table_name", "column_name"])
+
+
 def get_catalog_tags_report(_w, catalog, user_key):
     if not catalog:
         return pd.DataFrame(columns=["tag_name", "tag_value"])

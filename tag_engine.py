@@ -436,3 +436,78 @@ def build_import_plan(raw_records, taxonomy_rows=None):
             )
 
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Coverage and gap analysis (Feature 5)
+# ---------------------------------------------------------------------------
+
+def compute_required_keys(rows, scope):
+    """Return the sorted set of required (governed) tag keys defined for a scope."""
+    out = set()
+    for row in rows:
+        key = (row.get("key") or "").strip()
+        if not key or _norm(row.get("type", "")) != "governed":
+            continue
+        if row.get(f"scope_{scope}"):
+            out.add(key)
+    return sorted(out)
+
+
+def analyze_object_coverage(objects, required_keys, tagged_records):
+    """Compute required-tag coverage for a set of objects.
+
+    objects: list of object-id strings (e.g. schema names, or "schema.table").
+    required_keys: list of required tag keys for this scope.
+    tagged_records: list of dicts with at least object_id and tag_name.
+    Returns: {total, fully_covered, coverage_pct, gaps: [{object, missing_keys}]}.
+    """
+    tags_by_object = {}
+    for rec in tagged_records:
+        oid = rec.get("object_id")
+        tags_by_object.setdefault(oid, set()).add(rec.get("tag_name"))
+
+    total = len(objects)
+    gaps = []
+    fully = 0
+    for obj in objects:
+        present = tags_by_object.get(obj, set())
+        missing = [k for k in required_keys if k not in present]
+        if missing:
+            gaps.append({"object": obj, "missing_keys": missing})
+        else:
+            fully += 1
+
+    coverage_pct = round(100.0 * fully / total, 1) if total else 0.0
+    return {"total": total, "fully_covered": fully, "coverage_pct": coverage_pct, "gaps": gaps}
+
+
+def audit_value_drift(tagged_records, taxonomy_rows):
+    """Flag live tag values (from information_schema reports) outside a governed tag's
+    allowed-value set. tagged_records: list of dicts with tag_name/tag_value/object_id."""
+    taxonomy_by_key = {}
+    for row in taxonomy_rows:
+        k = (row.get("key") or "").strip()
+        if k:
+            taxonomy_by_key[_norm(k)] = row
+
+    issues = []
+    for rec in tagged_records:
+        key = rec.get("tag_name")
+        value = rec.get("tag_value")
+        taxonomy_row = taxonomy_by_key.get(_norm(key or ""))
+        if not taxonomy_row:
+            continue
+        allowed_values = [v.strip() for v in (taxonomy_row.get("values") or "").split(",") if v.strip()]
+        obj = rec.get("object_id", "")
+        for issue in lint_value_drift(key, allowed_values, value or ""):
+            if obj:
+                issue.object_ref = f"{obj}"
+            issues.append(issue)
+    return issues
+
+
+SENSITIVE_COLUMN_NAME_HINTS = [
+    "email", "ssn", "phone", "address", "dob", "birth", "tax_id",
+    "passport", "credit_card", "ip_address",
+]

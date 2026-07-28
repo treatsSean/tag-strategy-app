@@ -343,6 +343,149 @@ def get_existing_tags(_w, catalog, schema, table, user_key):
         return {}
 
 
+@st.cache_data(show_spinner=False, ttl=120)
+def audit_all_tables(_w, catalog, user_key):
+    """Catalog-wide table list (schema + table) — the coverage denominator for tables."""
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT table_schema, table_name FROM `{_ident_escape(catalog)}`.information_schema.tables",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["table_schema", "table_name"])
+    except Exception:
+        return pd.DataFrame(columns=["table_schema", "table_name"])
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def audit_all_schema_tags(_w, catalog, user_key):
+    """Catalog-wide schema_tags (no schema filter) for coverage/drift analysis."""
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.schema_tags",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def audit_all_table_tags(_w, catalog, user_key):
+    """Catalog-wide table_tags (no schema filter) for coverage/drift analysis."""
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name, table_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.table_tags",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "table_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "table_name", "tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def audit_all_column_tags(_w, catalog, user_key):
+    """Catalog-wide column_tags (no schema/table filter)."""
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name, table_name, column_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.column_tags",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def audit_sensitive_columns(_w, catalog, user_key):
+    """Catalog-wide columns whose name matches common sensitive-data hints (pushdown-filtered)."""
+    like_clause = " OR ".join(f"lower(column_name) LIKE '%{h}%'" for h in SENSITIVE_COLUMN_NAME_HINTS)
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=(
+                f"SELECT table_schema, table_name, column_name FROM `{_ident_escape(catalog)}`.information_schema.columns "
+                f"WHERE {like_clause}"
+            ),
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["table_schema", "table_name", "column_name"])
+    except Exception:
+        return pd.DataFrame(columns=["table_schema", "table_name", "column_name"])
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_catalog_tags_report(_w, catalog, user_key):
+    if not catalog:
+        return pd.DataFrame(columns=["tag_name", "tag_value"])
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.catalog_tags ORDER BY tag_name",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_schema_tags_report(_w, catalog, schema, user_key):
+    if not (catalog and schema):
+        return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
+    try:
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=(
+                f"SELECT schema_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.schema_tags "
+                f"WHERE schema_name = '{_sql_escape(schema)}' ORDER BY tag_name"
+            ),
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_table_tags_report(_w, catalog, schema, table, user_key):
+    if not (catalog and schema):
+        return pd.DataFrame(columns=["schema_name", "table_name", "tag_name", "tag_value"])
+    try:
+        where = f"WHERE schema_name = '{_sql_escape(schema)}'"
+        if table:
+            where += f" AND table_name = '{_sql_escape(table)}'"
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name, table_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.table_tags {where} ORDER BY table_name, tag_name",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "table_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "table_name", "tag_name", "tag_value"])
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_column_tags_report(_w, catalog, schema, table, user_key):
+    if not (catalog and schema):
+        return pd.DataFrame(columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
+    try:
+        where = f"WHERE schema_name = '{_sql_escape(schema)}'"
+        if table:
+            where += f" AND table_name = '{_sql_escape(table)}'"
+        df = _w.statement_execution.execute_statement(
+            warehouse_id=_get_warehouse_id(_w),
+            statement=f"SELECT schema_name, table_name, column_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.column_tags {where} ORDER BY table_name, column_name, tag_name",
+        )
+        rows = df.result.data_array if df and df.result and df.result.data_array else []
+        return pd.DataFrame(rows, columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
+    except Exception:
+        return pd.DataFrame(columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
+
+
 DEFAULT_ROWS = [
     {"category": "Classification / Sensitivity", "desc": "Overall risk level. Primary signal for access control policies.", "type": "governed", "key": "sensitivity_level", "values": "public, sensitive, confidential, restricted", "creates": "Central governance", "assigns": "Stewards / service principals", "automation": "Audit & review candidates", "owner": "", **_scope_flags("table", "view")},
     {"category": "PII Classification", "desc": "Column-level evidence of specific personal data types.", "type": "governed", "key": "pii", "values": "ssn, email, phone, name, dob, address, ip_address", "creates": "Central governance", "assigns": "Automation / stewards", "automation": "Auto-detect candidates", "owner": "", **_scope_flags("column")},
@@ -1235,149 +1378,6 @@ with tab_apply:
                                     st.error(msg)
             else:
                 st.caption("Select at least one tag above to preview the SQL before applying.")
-
-@st.cache_data(show_spinner=False, ttl=120)
-def audit_all_tables(_w, catalog, user_key):
-    """Catalog-wide table list (schema + table) — the coverage denominator for tables."""
-    try:
-        df = _w.statement_execution.execute_statement(
-            warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT table_schema, table_name FROM `{_ident_escape(catalog)}`.information_schema.tables",
-        )
-        rows = df.result.data_array if df and df.result and df.result.data_array else []
-        return pd.DataFrame(rows, columns=["table_schema", "table_name"])
-    except Exception:
-        return pd.DataFrame(columns=["table_schema", "table_name"])
-
-
-@st.cache_data(show_spinner=False, ttl=120)
-def audit_all_schema_tags(_w, catalog, user_key):
-    """Catalog-wide schema_tags (no schema filter) for coverage/drift analysis."""
-    try:
-        df = _w.statement_execution.execute_statement(
-            warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT schema_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.schema_tags",
-        )
-        rows = df.result.data_array if df and df.result and df.result.data_array else []
-        return pd.DataFrame(rows, columns=["schema_name", "tag_name", "tag_value"])
-    except Exception:
-        return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
-
-
-@st.cache_data(show_spinner=False, ttl=120)
-def audit_all_table_tags(_w, catalog, user_key):
-    """Catalog-wide table_tags (no schema filter) for coverage/drift analysis."""
-    try:
-        df = _w.statement_execution.execute_statement(
-            warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT schema_name, table_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.table_tags",
-        )
-        rows = df.result.data_array if df and df.result and df.result.data_array else []
-        return pd.DataFrame(rows, columns=["schema_name", "table_name", "tag_name", "tag_value"])
-    except Exception:
-        return pd.DataFrame(columns=["schema_name", "table_name", "tag_name", "tag_value"])
-
-
-@st.cache_data(show_spinner=False, ttl=120)
-def audit_all_column_tags(_w, catalog, user_key):
-    """Catalog-wide column_tags (no schema/table filter)."""
-    try:
-        df = _w.statement_execution.execute_statement(
-            warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT schema_name, table_name, column_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.column_tags",
-        )
-        rows = df.result.data_array if df and df.result and df.result.data_array else []
-        return pd.DataFrame(rows, columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
-    except Exception:
-        return pd.DataFrame(columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
-
-
-@st.cache_data(show_spinner=False, ttl=120)
-def audit_sensitive_columns(_w, catalog, user_key):
-    """Catalog-wide columns whose name matches common sensitive-data hints (pushdown-filtered)."""
-    like_clause = " OR ".join(f"lower(column_name) LIKE '%{h}%'" for h in SENSITIVE_COLUMN_NAME_HINTS)
-    try:
-        df = _w.statement_execution.execute_statement(
-            warehouse_id=_get_warehouse_id(_w),
-            statement=(
-                f"SELECT table_schema, table_name, column_name FROM `{_ident_escape(catalog)}`.information_schema.columns "
-                f"WHERE {like_clause}"
-            ),
-        )
-        rows = df.result.data_array if df and df.result and df.result.data_array else []
-        return pd.DataFrame(rows, columns=["table_schema", "table_name", "column_name"])
-    except Exception:
-        return pd.DataFrame(columns=["table_schema", "table_name", "column_name"])
-
-
-@st.cache_data(show_spinner=False, ttl=60)
-def get_catalog_tags_report(_w, catalog, user_key):
-    if not catalog:
-        return pd.DataFrame(columns=["tag_name", "tag_value"])
-    try:
-        df = _w.statement_execution.execute_statement(
-            warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.catalog_tags ORDER BY tag_name",
-        )
-        rows = df.result.data_array if df and df.result and df.result.data_array else []
-        return pd.DataFrame(rows, columns=["tag_name", "tag_value"])
-    except Exception:
-        return pd.DataFrame(columns=["tag_name", "tag_value"])
-
-
-@st.cache_data(show_spinner=False, ttl=60)
-def get_schema_tags_report(_w, catalog, schema, user_key):
-    if not (catalog and schema):
-        return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
-    try:
-        df = _w.statement_execution.execute_statement(
-            warehouse_id=_get_warehouse_id(_w),
-            statement=(
-                f"SELECT schema_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.schema_tags "
-                f"WHERE schema_name = '{_sql_escape(schema)}' ORDER BY tag_name"
-            ),
-        )
-        rows = df.result.data_array if df and df.result and df.result.data_array else []
-        return pd.DataFrame(rows, columns=["schema_name", "tag_name", "tag_value"])
-    except Exception:
-        return pd.DataFrame(columns=["schema_name", "tag_name", "tag_value"])
-
-
-@st.cache_data(show_spinner=False, ttl=60)
-def get_table_tags_report(_w, catalog, schema, table, user_key):
-    if not (catalog and schema):
-        return pd.DataFrame(columns=["schema_name", "table_name", "tag_name", "tag_value"])
-    try:
-        where = f"WHERE schema_name = '{_sql_escape(schema)}'"
-        if table:
-            where += f" AND table_name = '{_sql_escape(table)}'"
-        df = _w.statement_execution.execute_statement(
-            warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT schema_name, table_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.table_tags {where} ORDER BY table_name, tag_name",
-        )
-        rows = df.result.data_array if df and df.result and df.result.data_array else []
-        return pd.DataFrame(rows, columns=["schema_name", "table_name", "tag_name", "tag_value"])
-    except Exception:
-        return pd.DataFrame(columns=["schema_name", "table_name", "tag_name", "tag_value"])
-
-
-@st.cache_data(show_spinner=False, ttl=60)
-def get_column_tags_report(_w, catalog, schema, table, user_key):
-    if not (catalog and schema):
-        return pd.DataFrame(columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
-    try:
-        where = f"WHERE schema_name = '{_sql_escape(schema)}'"
-        if table:
-            where += f" AND table_name = '{_sql_escape(table)}'"
-        df = _w.statement_execution.execute_statement(
-            warehouse_id=_get_warehouse_id(_w),
-            statement=f"SELECT schema_name, table_name, column_name, tag_name, tag_value FROM `{_ident_escape(catalog)}`.information_schema.column_tags {where} ORDER BY table_name, column_name, tag_name",
-        )
-        rows = df.result.data_array if df and df.result and df.result.data_array else []
-        return pd.DataFrame(rows, columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
-    except Exception:
-        return pd.DataFrame(columns=["schema_name", "table_name", "column_name", "tag_name", "tag_value"])
-
 
 with tab_report:
     st.markdown("#### Tag report")

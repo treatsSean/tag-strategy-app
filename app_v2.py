@@ -132,6 +132,10 @@ if THEME == "Light":
     _FOOTER_TEXT = "#0B2026"   # Navy 900
     _CODE_BG = "#EEEDE9"       # Oat Medium
     _CODE_TEXT = "#0B2026"     # Navy 900
+    _NAV_ACTIVE_BG = "rgba(11, 32, 38, 0.08)"
+    _NAV_ACTIVE_TEXT = "#0B2026"
+    _NAV_INACTIVE_TEXT = "rgba(11, 32, 38, 0.65)"
+    _NAV_HOVER_BG = "rgba(11, 32, 38, 0.05)"
 else:
     _PAGE_BG = "#F9F7F4"       # Oat Light
     _SIDEBAR_BG = "#0B2026"    # Navy 900
@@ -141,6 +145,10 @@ else:
     _FOOTER_TEXT = "#F9F7F4"   # Oat Light
     _CODE_BG = "#0B2026"       # Navy 900
     _CODE_TEXT = "#F9F7F4"     # Oat Light
+    _NAV_ACTIVE_BG = "rgba(249, 247, 244, 0.16)"
+    _NAV_ACTIVE_TEXT = "#F9F7F4"
+    _NAV_INACTIVE_TEXT = "rgba(249, 247, 244, 0.75)"
+    _NAV_HOVER_BG = "rgba(249, 247, 244, 0.08)"
 
 st.markdown(f"""
 <style>
@@ -186,6 +194,41 @@ st.markdown(f"""
     border-color: #FF3621 !important;
   }}
   a, a:visited {{ color: #FF3621 !important; }}
+
+  /* Left-hand icon navigation: unselected items sit flush against the sidebar with muted text;
+     the selected item gets a soft color-wash overlay (not the CTA-red button fill) plus a thin
+     Lava accent bar on the left edge, mirroring the Databricks left-nav selected-state pattern. */
+  .st-key-nav_container .stButton > button {{
+    width: 100%;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    gap: 10px;
+    border: none !important;
+    border-radius: 6px !important;
+    font-weight: 500 !important;
+    padding: 0.5rem 0.75rem !important;
+    margin-bottom: 2px !important;
+    box-shadow: none !important;
+  }}
+  .st-key-nav_container .stButton > button[kind="secondary"] {{
+    background-color: transparent !important;
+    color: {_NAV_INACTIVE_TEXT} !important;
+  }}
+  .st-key-nav_container .stButton > button[kind="secondary"]:hover {{
+    background-color: {_NAV_HOVER_BG} !important;
+    color: {_NAV_ACTIVE_TEXT} !important;
+  }}
+  .st-key-nav_container .stButton > button[kind="primary"] {{
+    background-color: {_NAV_ACTIVE_BG} !important;
+    color: {_NAV_ACTIVE_TEXT} !important;
+    box-shadow: inset 3px 0 0 0 #FF3621 !important;
+  }}
+  .st-key-nav_container .stButton > button[kind="primary"]:hover {{
+    background-color: {_NAV_ACTIVE_BG} !important;
+  }}
+  .st-key-nav_container [data-testid="stIconMaterial"] {{
+    color: inherit !important;
+  }}
 
   [data-testid="stCode"] {{
     background-color: {_CODE_BG} !important;
@@ -874,12 +917,25 @@ with st.sidebar:
         st.caption("Runs with your own Unity Catalog permissions (user authorization) — you'll only ever see what you already have access to.")
 
     st.markdown("##### Navigate")
-    st.radio(
-        "Section",
-        ["Home", "Build", "Policy and Compliance", "Implementation"],
-        key="nav_section",
-        label_visibility="collapsed",
-    )
+    st.session_state.setdefault("nav_section", "Home")
+    _NAV_ITEMS = [
+        ("Home", "home"),
+        ("Build", "build"),
+        ("Policy and Compliance", "policy"),
+        ("Implementation", "rocket_launch"),
+    ]
+    with st.container(key="nav_container"):
+        for _section_name, _section_icon in _NAV_ITEMS:
+            _is_active = st.session_state.nav_section == _section_name
+            if st.button(
+                _section_name,
+                key=f"nav_btn_{_section_name}",
+                icon=f":material/{_section_icon}:",
+                use_container_width=True,
+                type="primary" if _is_active else "secondary",
+            ):
+                st.session_state.nav_section = _section_name
+                st.rerun()
     st.divider()
 
     st.markdown("##### Target")

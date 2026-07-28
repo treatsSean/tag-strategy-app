@@ -701,6 +701,11 @@ with tab_matrix:
     m3.metric("Need attention", incomplete_count)
     m4.metric("With scope", scoped_count)
 
+    if st.session_state.pop("_reset_matrix_filters", False):
+        st.session_state["matrix_search"] = ""
+        st.session_state["matrix_category"] = "All categories"
+        st.session_state["matrix_type"] = "All"
+
     tool_left, tool_mid, tool_right = st.columns([2, 1, 1])
     with tool_left:
         matrix_search = st.text_input("Search tag rows", key="matrix_search", placeholder="Search category, key, description, or owner")
@@ -1231,7 +1236,6 @@ with tab_apply:
             else:
                 st.caption("Select at least one tag above to preview the SQL before applying.")
 
-@st.cache_data(show_spinner=False, ttl=60)
 @st.cache_data(show_spinner=False, ttl=120)
 def audit_all_tables(_w, catalog, user_key):
     """Catalog-wide table list (schema + table) — the coverage denominator for tables."""
@@ -1306,6 +1310,7 @@ def audit_sensitive_columns(_w, catalog, user_key):
         return pd.DataFrame(columns=["table_schema", "table_name", "column_name"])
 
 
+@st.cache_data(show_spinner=False, ttl=60)
 def get_catalog_tags_report(_w, catalog, user_key):
     if not catalog:
         return pd.DataFrame(columns=["tag_name", "tag_value"])

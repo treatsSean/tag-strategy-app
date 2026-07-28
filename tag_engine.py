@@ -718,3 +718,74 @@ def default_taxonomy_suggestion():
         },
     ]
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# ABAC policy candidate suggester
+# ─────────────────────────────────────────────────────────────────────────
+
+_ABAC_PII_HINTS = ["pii", "ssn", "email", "phone", "address", "dob", "birth", "tax_id", "passport", "credit_card", "ip_address"]
+_ABAC_SENSITIVITY_HINTS = ["sensitiv", "classif", "restrict", "confidential"]
+_ABAC_COMPLIANCE_HINTS = ["complian", "gdpr", "hipaa", "pci", "sox", "ccpa", "regulat"]
+_ABAC_SEGMENTATION_HINTS = ["region", "department", "business_unit", "geo", "tenant", "org", "domain", "subdomain"]
+
+
+def _abac_text_matches(text, hints):
+    t = (text or "").lower()
+    return any(h in t for h in hints)
+
+
+def suggest_abac_candidates(rows):
+    """Scan governed Tag Matrix rows for good ABAC (row filter / column mask) policy candidates.
+
+    ABAC policies cannot be applied to views, so view-only scope is excluded (per Unity Catalog ABAC
+    limitations). Returns a list of dicts: {key, category, values, scopes, policy_types, rationale}.
+    `policy_types` is a subset of ["column_mask", "row_filter"] — a tag can suggest both if it carries
+    both column and table/schema/catalog scope (e.g. a PII tag with a compliance angle).
+    """
+    candidates = []
+    for row in rows:
+        if _norm(row.get("type", "")) != "governed":
+            continue
+        key = (row.get("key") or "").strip()
+        if not key:
+            continue
+        category = row.get("category", "")
+        haystack = f"{key} {category}"
+        scopes = [s for s in ("catalog", "schema", "table", "view", "column") if row.get(f"scope_{s}")]
+        non_view_scopes = [s for s in scopes if s != "view"]
+        if not non_view_scopes:
+            continue
+
+        policy_types = []
+        rationale_bits = []
+
+        if "column" in non_view_scopes and _abac_text_matches(haystack, _ABAC_PII_HINTS):
+            policy_types.append("column_mask")
+            rationale_bits.append("column-level PII signal — good column mask candidate")
+
+        table_level_scopes = [s for s in non_view_scopes if s in ("catalog", "schema", "table")]
+        is_sensitivity = _abac_text_matches(haystack, _ABAC_SENSITIVITY_HINTS)
+        is_compliance = _abac_text_matches(haystack, _ABAC_COMPLIANCE_HINTS)
+        is_segmentation = _abac_text_matches(haystack, _ABAC_SEGMENTATION_HINTS)
+        if table_level_scopes and (is_sensitivity or is_compliance or is_segmentation):
+            policy_types.append("row_filter")
+            if is_sensitivity:
+                rationale_bits.append("sensitivity/classification signal — good row filter gate")
+            elif is_compliance:
+                rationale_bits.append("compliance/regulatory signal — good row filter gate")
+            else:
+                rationale_bits.append("segmentation signal (region/department/tenant) — good row filter gate")
+
+        if not policy_types:
+            continue
+
+        candidates.append({
+            "key": key,
+            "category": category,
+            "values": row.get("values", ""),
+            "scopes": non_view_scopes,
+            "policy_types": policy_types,
+            "rationale": "; ".join(rationale_bits),
+        })
+    return candidates
+

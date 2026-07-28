@@ -22,6 +22,7 @@ from tag_engine import (
     build_taxonomy_messages,
     parse_taxonomy_response,
     default_taxonomy_suggestion,
+    suggest_abac_candidates,
 )
 
 SCOPE_OPTIONS = ["catalog", "schema", "table", "view", "column"]
@@ -769,6 +770,87 @@ def generate_tf(catalog="", schema="", table=""):
     return "\n".join(lines)
 
 
+def generate_abac_sql(catalog="", schema=""):
+    """Render ABAC policy skeletons (UDF stub + CREATE POLICY) for the governed-tag candidates
+    detected by suggest_abac_candidates(). Skeletons are starting points — the masking/filtering
+    logic inside each UDF is a placeholder and must be replaced with real logic before use.
+    ABAC policies cannot be applied to views; suggest_abac_candidates() already excludes view-only scope."""
+    cat = catalog or "<catalog>"
+    sch = f"{catalog + '.' if catalog else ''}{schema or '<schema>'}"
+    on_clause = f"SCHEMA {sch}" if schema else f"CATALOG {cat}"
+    gov_fn_prefix = f"{_ident_escape(catalog) if catalog else '<catalog>'}.governance"
+    today = date.today().strftime("%B %d, %Y")
+
+    rows = st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records")
+    candidates = suggest_abac_candidates(rows)
+
+    lines = [
+        "-- ════════════════════════════════════════════════════════════",
+        "-- Unity Catalog · ABAC Policy Skeletons",
+        f"-- Generated: {today}",
+        "-- Requires: DBR 16.4+ or serverless compute. ABAC policies cannot be applied to views.",
+        "-- These are STARTING POINTS — replace placeholder UDF logic with real redaction/filter rules",
+        "-- and replace `governance-admins` with your actual exempt principal(s) before running.",
+        "-- ════════════════════════════════════════════════════════════",
+        "",
+    ]
+    if not candidates:
+        lines.append("-- No ABAC candidates detected. Add governed tags with PII, sensitivity, compliance,")
+        lines.append("-- or segmentation signals (column scope for PII; catalog/schema/table scope for the rest).")
+        return "\n".join(lines)
+
+    for cand in candidates:
+        key = cand["key"]
+        vals = [v.strip() for v in str(cand["values"]).split(",") if v.strip()]
+        if "column_mask" in cand["policy_types"]:
+            mask_fn = f"{gov_fn_prefix}.mask_{key}"
+            lines += [
+                f"-- ── Column mask: `{key}` ── {cand['rationale']}",
+                "-- 1. Create the masking UDF (placeholder — replace with real redaction logic):",
+                f"CREATE OR REPLACE FUNCTION {mask_fn}(value STRING)",
+                "RETURNS STRING",
+                "RETURN CASE WHEN is_account_group_member('governance-admins') THEN value ELSE '***REDACTED***' END;",
+                "",
+                "-- 2. Create the policy:",
+                f"CREATE POLICY {key}_mask",
+                f"ON {on_clause}",
+                f"COMMENT 'Mask columns tagged \"{_sql_escape(key)}\"'",
+                f"COLUMN MASK {mask_fn}",
+                "TO `All Users` EXCEPT `governance-admins`",
+                "FOR TABLES",
+                f"MATCH COLUMNS has_tag('{_sql_escape(key)}') AS {key}_col",
+                f"ON COLUMN {key}_col;",
+                "",
+            ]
+        if "row_filter" in cand["policy_types"]:
+            filter_fn = f"{gov_fn_prefix}.filter_{key}"
+            example_val = vals[0] if vals else "<value>"
+            lines += [
+                f"-- ── Row filter: `{key}` ── {cand['rationale']}",
+                "-- 1. Create the row filter UDF (placeholder — replace with real filter logic):",
+                f"CREATE OR REPLACE FUNCTION {filter_fn}()",
+                "RETURNS BOOLEAN",
+                "RETURN is_account_group_member('governance-admins');",
+                "",
+                "-- 2. Create the policy — applies only to tables tagged with this key:",
+                f"CREATE POLICY {key}_row_filter",
+                f"ON {on_clause}",
+                f"COMMENT 'Restrict rows on tables tagged \"{_sql_escape(key)}\" = \"{_sql_escape(example_val)}\"'",
+                f"ROW FILTER {filter_fn}",
+                "TO `All Users` EXCEPT `governance-admins`",
+                "FOR TABLES",
+                f"WHEN has_tag_value('{_sql_escape(key)}', '{_sql_escape(example_val)}');",
+                "",
+            ]
+
+    lines += [
+        "-- ── Verify ──",
+        f"SHOW POLICIES ON {on_clause};",
+        f"SHOW EFFECTIVE POLICIES ON TABLE {cat if not schema else sch}.<table_name>;",
+    ]
+    return "\n".join(lines)
+
+
 with st.sidebar:
     st.markdown(
         """
@@ -826,13 +908,15 @@ with st.sidebar:
     st.radio("Theme", ["Dark Header", "Light"], key="theme_mode", horizontal=True)
 
 
-tab_help, tab_strategy, tab_matrix, tab_validate, tab_import, tab_audit, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
+tab_help, tab_strategy, tab_matrix, tab_validate, tab_import, tab_audit, tab_abac, tab_cost, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
     "How to Use",
     "Strategy",
     "Tag Matrix",
     "Validate",
     "Import",
     "Audit",
+    "ABAC",
+    "Cost Tags",
     "SQL — apply tags",
     "Terraform HCL",
     "Apply to workspace",
@@ -1404,6 +1488,103 @@ with tab_audit:
             else:
                 st.warning(f"{len(_untagged_df)} of {len(_sensitive_df)} name-matched sensitive column(s) have no tags at all.")
                 st.dataframe(_untagged_df, use_container_width=True, hide_index=True)
+
+with tab_abac:
+    st.markdown("#### ABAC policy candidates")
+    st.caption(
+        "Attribute-Based Access Control (ABAC) uses governed tags to drive row filters and column masks "
+        "dynamically across Unity Catalog, instead of hardcoding per-table rules. Requires DBR 16.4+ or "
+        "serverless compute. Policies cannot be applied to views — view-only scope is excluded below."
+    )
+
+    _abac_rows = st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records")
+    _abac_candidates = suggest_abac_candidates(_abac_rows)
+
+    if not _abac_candidates:
+        st.info(
+            "No ABAC candidates detected yet. Add governed tags with a PII signal at **column** scope "
+            "(e.g. `pii`, `email`), or a sensitivity/compliance/segmentation signal at **catalog, schema, "
+            "or table** scope (e.g. `sensitivity_level`, `compliance`, `region`) in Tag Matrix."
+        )
+    else:
+        st.success(f"Found {len(_abac_candidates)} governed tag(s) that look like good ABAC policy candidates.")
+        for _cand in _abac_candidates:
+            with st.container(border=True):
+                _badges = " · ".join(
+                    "Column mask" if pt == "column_mask" else "Row filter" for pt in _cand["policy_types"]
+                )
+                st.markdown(f"**`{_cand['key']}`** — {_badges}")
+                st.caption(f"{_cand['category']} · Scope: {', '.join(_cand['scopes'])} · {_cand['rationale']}")
+                if _cand["values"]:
+                    st.caption(f"Allowed values: {_cand['values']}")
+
+        st.markdown("---")
+        st.markdown("##### Generate policy skeletons")
+        st.caption(
+            "Produces a UDF stub plus a `CREATE POLICY` statement per candidate, scoped to the catalog/schema "
+            "selected in the sidebar. Replace the placeholder UDF logic and `governance-admins` principal before running."
+        )
+        _abac_cat = st.session_state.target_catalog
+        _abac_sch = st.session_state.target_schema
+        _abac_sql = generate_abac_sql(_abac_cat, _abac_sch)
+        st.code(_abac_sql, language="sql")
+        st.download_button("Download ABAC policy SQL", _abac_sql, file_name="abac_policies.sql", mime="text/plain", type="primary")
+        st.caption("Quotas: 10 policies per catalog, 10 per schema, 5 per table, max 3 `MATCH COLUMNS` conditions per policy.")
+
+with tab_cost:
+    st.markdown("#### Cost tags")
+    st.caption(
+        "Governed tags classified as cost-attribution signals (cost center, chargeback, business unit). "
+        "Unity Catalog tags do **not** automatically propagate to cluster/warehouse/job cost tags — "
+        "this tab helps you keep the two systems in sync."
+    )
+
+    _cost_rows = [r for _, r in _governed_rows().iterrows() if classify_tag_domain(r["key"]) in ("cost", "both")]
+
+    if not _cost_rows:
+        st.info(
+            "No cost-domain governed tags detected yet. Tags whose key or category mentions cost, budget, "
+            "chargeback, or business unit are classified as cost-domain — add one in Tag Matrix (e.g. `cost_center`)."
+        )
+    else:
+        st.success(f"Found {len(_cost_rows)} cost-domain governed tag(s).")
+        _cost_table = pd.DataFrame([
+            {
+                "key": r["key"],
+                "category": r.get("category", ""),
+                "values": r.get("values", ""),
+                "scope": _row_scope_label(r),
+                "owner": r.get("owner", "") or "—",
+            }
+            for r in _cost_rows
+        ])
+        st.dataframe(_cost_table, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("##### Compute cost-tag crosswalk")
+        st.caption(
+            "A starter cluster policy snippet that mirrors these UC tag keys as compute `custom_tags` defaults, "
+            "so cost attribution stays consistent between Unity Catalog and cluster/warehouse billing tags."
+        )
+        _cost_policy = {
+            "custom_tags.tag_name": {"type": "allowlist", "values": [r["key"] for r in _cost_rows], "hidden": False}
+        }
+        for r in _cost_rows:
+            _vals = [v.strip() for v in str(r.get("values", "")).split(",") if v.strip()]
+            if _vals:
+                _cost_policy[f"custom_tags.{r['key']}"] = {"type": "allowlist", "values": _vals, "defaultValue": _vals[0]}
+            else:
+                _cost_policy[f"custom_tags.{r['key']}"] = {"type": "fixed", "value": "<set per cluster>"}
+        _cost_policy_json = json.dumps(_cost_policy, indent=2)
+        st.code(_cost_policy_json, language="json")
+        st.download_button(
+            "Download cluster policy JSON",
+            _cost_policy_json,
+            file_name="cost_tag_cluster_policy.json",
+            mime="application/json",
+            type="primary",
+        )
+        st.caption("Attach this as (or merge it into) a cluster policy so every cluster created under it carries the same cost-tag keys.")
 
 with tab_sql:
     st.markdown("#### SQL — apply tags to Unity Catalog")

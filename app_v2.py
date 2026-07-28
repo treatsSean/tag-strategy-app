@@ -241,32 +241,32 @@ st.markdown(f"""
   .db-sidebar-brand {{
     display: flex;
     align-items: center;
-    padding-bottom: 10px;
-    margin-bottom: 12px;
+    padding-bottom: 6px;
+    margin-bottom: 6px;
     border-bottom: 1px solid {_SIDEBAR_BORDER};
   }}
   .db-sidebar-brand .db-sidebar-name {{ font-size: 13.5px; font-weight: 700; letter-spacing: 0.02em; }}
 
   [data-testid="stSidebar"] .block-container {{
-    padding-top: 1.25rem !important;
+    padding-top: 0.6rem !important;
   }}
   [data-testid="stSidebar"] h5 {{
-    margin-top: 0.2rem !important;
-    margin-bottom: 0.3rem !important;
+    margin-top: 0 !important;
+    margin-bottom: 0.25rem !important;
     font-size: 0.82rem !important;
     text-transform: uppercase;
     letter-spacing: 0.03em;
     opacity: 0.85;
   }}
   [data-testid="stSidebar"] hr {{
-    margin: 0.6rem 0 !important;
+    margin: 0.4rem 0 !important;
   }}
   [data-testid="stSidebar"] [data-testid="stAlert"] {{
     padding: 0.45rem 0.6rem !important;
     font-size: 12.5px !important;
   }}
   [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{
-    gap: 0.5rem;
+    gap: 0.3rem;
   }}
 
   button[data-baseweb="tab"] {{
@@ -912,8 +912,10 @@ with st.sidebar:
         w = None
         user_key = None
     else:
-        st.caption(f"Connected as **{user_key}**")
-        st.caption("Runs with your own Unity Catalog permissions (user authorization) — you'll only ever see what you already have access to.")
+        st.caption(
+            f"Connected as **{user_key}**  \n"
+            "Runs with your own Unity Catalog permissions (user authorization) — you'll only ever see what you already have access to."
+        )
 
     st.markdown("##### Navigate")
     _NAV_SECTION_ICONS = {

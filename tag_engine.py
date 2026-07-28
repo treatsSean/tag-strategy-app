@@ -8,6 +8,7 @@ from the Unity Catalog Tag Strategy Builder build plan.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Literal, Optional
@@ -511,3 +512,209 @@ SENSITIVE_COLUMN_NAME_HINTS = [
     "email", "ssn", "phone", "address", "dob", "birth", "tax_id",
     "passport", "credit_card", "ip_address",
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Feature 1: Prompt-to-taxonomy designer
+# ─────────────────────────────────────────────────────────────────────────
+
+_TAXONOMY_VALID_SCOPES = ("catalog", "schema", "table", "view", "column")
+
+_TAXONOMY_VALID_CREATES = ["Central governance", "Domain leads", "Team leads", "Anyone"]
+
+_TAXONOMY_VALID_ASSIGNS = [
+    "Governance team only",
+    "Service principals / admins",
+    "Stewards / service principals",
+    "Automation / stewards",
+    "Governance team / owners",
+    "Team leads / finance ops",
+    "Practitioners / team leads",
+    "Practitioners",
+    "Anyone",
+]
+
+_TAXONOMY_VALID_AUTOMATION = [
+    "None",
+    "Manual",
+    "Manual + propagation",
+    "Audit & review candidates",
+    "AMM surfaces candidates",
+    "Auto-detect candidates",
+    "Auto-assign (no review)",
+    "Propagation only",
+]
+
+TAXONOMY_SYSTEM_PROMPT = """You are a Unity Catalog data governance expert. Given a natural-language description of an
+organization's tagging needs, produce a JSON array of tag definitions. Return ONLY a JSON array — no prose, no
+markdown code fences, no surrounding object.
+
+Each element must be an object with exactly these fields:
+- "category": string, short human label grouping this tag (e.g. "Classification / Sensitivity")
+- "desc": string, one sentence describing what the tag captures and why it matters
+- "type": either "governed" or "ungoverned"
+- "key": string, snake_case tag key (lowercase letters, digits, underscores only — no spaces)
+- "values": comma-separated string of allowed values, or "" if open-ended / free text
+- "scopes": array of zero or more of "catalog", "schema", "table", "view", "column" indicating where the tag applies
+- "creates": one of "Central governance", "Domain leads", "Team leads", "Anyone"
+- "assigns": one of "Governance team only", "Service principals / admins", "Stewards / service principals",
+  "Automation / stewards", "Governance team / owners", "Team leads / finance ops", "Practitioners / team leads",
+  "Practitioners", "Anyone"
+- "automation": one of "None", "Manual", "Manual + propagation", "Audit & review candidates",
+  "AMM surfaces candidates", "Auto-detect candidates", "Auto-assign (no review)", "Propagation only"
+- "owner": string, a suggested owning team/role, or "" if unknown
+
+Produce between 1 and 12 tag definitions that best address the request. Prefer well-known Unity Catalog governance
+patterns (classification/sensitivity, PII, compliance, domain, ownership, cost center, lifecycle/certification) when
+relevant, but tailor keys and values to what the user actually described."""
+
+
+def build_taxonomy_messages(user_prompt):
+    """Build the (system_prompt, user_message) pair sent to the foundation model for taxonomy generation."""
+    return TAXONOMY_SYSTEM_PROMPT, f"Design a tagging taxonomy for this need:\n\n{(user_prompt or '').strip()}"
+
+
+def _taxonomy_scope_flags(scopes):
+    requested = {str(s).strip().lower() for s in scopes} if isinstance(scopes, list) else set()
+    return {f"scope_{s}": (s in requested) for s in _TAXONOMY_VALID_SCOPES}
+
+
+def parse_taxonomy_response(raw_text):
+    """Parse an LLM's taxonomy JSON response into Tag Matrix-shaped row dicts.
+
+    Returns (rows, errors). `rows` is a list of dicts matching the app's Tag Matrix row schema
+    (category/desc/type/key/values/scope_*/creates/assigns/automation/owner — no row_id). `errors`
+    is a list of human-readable strings for anything that could not be parsed or had to be
+    defaulted, so problems are surfaced to the user rather than silently dropped.
+    """
+    errors = []
+    text = (raw_text or "").strip()
+
+    if text.startswith("```"):
+        parts = text.split("```")
+        text = parts[1] if len(parts) >= 2 else text.lstrip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+
+    try:
+        parsed = json.loads(text)
+    except Exception as e:
+        return [], [f"Could not parse model response as JSON: {e}"]
+
+    if isinstance(parsed, dict):
+        for v in parsed.values():
+            if isinstance(v, list):
+                parsed = v
+                break
+
+    if not isinstance(parsed, list):
+        return [], ["Model response was not a JSON array of tag definitions."]
+
+    rows = []
+    for i, item in enumerate(parsed):
+        pos = i + 1
+        if not isinstance(item, dict):
+            errors.append(f"Item {pos}: not a JSON object — skipped.")
+            continue
+
+        key = re.sub(r"[^a-z0-9_]", "_", str(item.get("key", "")).strip().lower().replace(" ", "_").replace("-", "_"))
+        key = re.sub(r"_+", "_", key).strip("_")
+        if not key:
+            errors.append(f"Item {pos}: missing or invalid 'key' — skipped.")
+            continue
+
+        gov_type = str(item.get("type", "governed")).strip().lower()
+        if gov_type not in ("governed", "ungoverned"):
+            gov_type = "governed"
+
+        scope_flags = _taxonomy_scope_flags(item.get("scopes", []))
+        if not any(scope_flags.values()):
+            errors.append(f"Item {pos} ('{key}'): no valid scope specified — defaulted to 'table'.")
+            scope_flags["scope_table"] = True
+
+        creates = str(item.get("creates", "")).strip()
+        if creates not in _TAXONOMY_VALID_CREATES:
+            creates = _TAXONOMY_VALID_CREATES[0]
+
+        assigns = str(item.get("assigns", "")).strip()
+        if assigns not in _TAXONOMY_VALID_ASSIGNS:
+            assigns = "Practitioners"
+
+        automation = str(item.get("automation", "")).strip()
+        if automation not in _TAXONOMY_VALID_AUTOMATION:
+            automation = "Manual"
+
+        rows.append({
+            "category": str(item.get("category", "")).strip() or "Suggested",
+            "desc": str(item.get("desc", "")).strip(),
+            "type": gov_type,
+            "key": key,
+            "values": str(item.get("values", "")).strip(),
+            **scope_flags,
+            "creates": creates,
+            "assigns": assigns,
+            "automation": automation,
+            "owner": str(item.get("owner", "")).strip(),
+        })
+
+    if not rows and not errors:
+        errors.append("Model returned an empty taxonomy.")
+    return rows, errors
+
+
+def default_taxonomy_suggestion():
+    """Starter taxonomy used as a one-click fallback when the model is unavailable, its
+    response fails to parse, or the user just wants a quick baseline: data_classification,
+    data_owner, cost_center, environment."""
+    return [
+        {
+            "category": "Classification / Sensitivity",
+            "desc": "Overall sensitivity/risk level of the data asset. Primary signal for access policies.",
+            "type": "governed",
+            "key": "data_classification",
+            "values": "public, internal, confidential, restricted",
+            **_taxonomy_scope_flags(["table", "view"]),
+            "creates": "Central governance",
+            "assigns": "Stewards / service principals",
+            "automation": "Audit & review candidates",
+            "owner": "",
+        },
+        {
+            "category": "Ownership",
+            "desc": "Individual or team accountable for this asset's quality and access decisions.",
+            "type": "governed",
+            "key": "data_owner",
+            "values": "",
+            **_taxonomy_scope_flags(["schema", "table"]),
+            "creates": "Central governance",
+            "assigns": "Practitioners / team leads",
+            "automation": "Manual",
+            "owner": "",
+        },
+        {
+            "category": "Cost Attribution",
+            "desc": "Ties the asset to a cost center for chargeback and cost-allocation reporting.",
+            "type": "governed",
+            "key": "cost_center",
+            "values": "",
+            **_taxonomy_scope_flags(["catalog", "schema"]),
+            "creates": "Central governance",
+            "assigns": "Team leads / finance ops",
+            "automation": "Manual",
+            "owner": "",
+        },
+        {
+            "category": "Lifecycle / Environment",
+            "desc": "Deployment environment or lifecycle stage the asset serves.",
+            "type": "governed",
+            "key": "environment",
+            "values": "dev, staging, prod",
+            **_taxonomy_scope_flags(["catalog", "schema", "table", "view"]),
+            "creates": "Central governance",
+            "assigns": "Practitioners",
+            "automation": "Manual",
+            "owner": "",
+        },
+    ]
+

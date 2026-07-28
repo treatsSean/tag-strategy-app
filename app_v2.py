@@ -19,6 +19,9 @@ from tag_engine import (
     analyze_object_coverage,
     audit_value_drift,
     SENSITIVE_COLUMN_NAME_HINTS,
+    build_taxonomy_messages,
+    parse_taxonomy_response,
+    default_taxonomy_suggestion,
 )
 
 SCOPE_OPTIONS = ["catalog", "schema", "table", "view", "column"]
@@ -45,6 +48,12 @@ AUTOMATION_OPTIONS = [
     "Auto-assign (no review)",
     "Propagation only",
 ]
+
+# Foundation model endpoint used by the Strategy tab's prompt-to-taxonomy generator. Queried with the
+# app's own service-principal identity (app authorization), not the viewing user's token: this is a
+# generic LLM completion with no dependency on the user's Unity Catalog permissions, so it does not
+# need a model-serving user-authorization scope grant/re-consent.
+TAXONOMY_MODEL_ENDPOINT = "databricks-claude-sonnet-4-5"
 
 
 def _ident_escape(s):
@@ -261,6 +270,42 @@ def get_workspace_client():
         return w, user_key, None
     except Exception as e:
         return None, None, str(e)
+
+
+def get_app_client():
+    """Build a WorkspaceClient using the app's own service-principal identity (app authorization),
+    not the viewing user's forwarded token. Reserved for actions that don't touch governed UC data on
+    the user's behalf — currently just the Strategy tab's taxonomy generator, which is a generic LLM
+    completion call. Do NOT use this for anything that reads/writes catalog, schema, table, or column
+    data; those must keep using get_workspace_client() so Unity Catalog permissions are respected."""
+    from databricks.sdk import WorkspaceClient
+    return WorkspaceClient()
+
+
+def generate_taxonomy_from_prompt(user_prompt):
+    """Call the foundation model serving endpoint to turn a natural-language description of tagging
+    needs into structured Tag Matrix rows. Returns (rows, errors, raw_text)."""
+    from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+
+    system_prompt, user_message = build_taxonomy_messages(user_prompt)
+    try:
+        app_client = get_app_client()
+        response = app_client.serving_endpoints.query(
+            name=TAXONOMY_MODEL_ENDPOINT,
+            messages=[
+                ChatMessage(role=ChatMessageRole.SYSTEM, content=system_prompt),
+                ChatMessage(role=ChatMessageRole.USER, content=user_message),
+            ],
+            max_tokens=2000,
+            temperature=0.2,
+        )
+        raw_text = response.choices[0].message.content if response and response.choices else ""
+    except Exception as e:
+        print(f"[tag-strategy-app] generate_taxonomy_from_prompt error: {e}")
+        return [], [f"Model call failed: {e}"], None
+
+    rows, parse_errors = parse_taxonomy_response(raw_text)
+    return rows, parse_errors, raw_text
 
 
 @st.cache_data(show_spinner=False, ttl=300)
@@ -781,8 +826,9 @@ with st.sidebar:
     st.radio("Theme", ["Dark Header", "Light"], key="theme_mode", horizontal=True)
 
 
-tab_help, tab_matrix, tab_validate, tab_import, tab_audit, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
+tab_help, tab_strategy, tab_matrix, tab_validate, tab_import, tab_audit, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
     "How to Use",
+    "Strategy",
     "Tag Matrix",
     "Validate",
     "Import",
@@ -804,9 +850,10 @@ with tab_help:
     st.markdown("#### How to use it")
     st.markdown(
         "1. Use the **sidebar** to pick appearance and a target catalog/schema/table.\n"
-        "2. Use **Tag Matrix** to design the strategy in grouped tag cards.\n"
-        "3. Use **SQL** or **Terraform** to export the strategy.\n"
-        "4. Use **Apply to Workspace** to assign governed tags live."
+        "2. Optionally use **Strategy** to generate a starter taxonomy from a plain-language prompt.\n"
+        "3. Use **Tag Matrix** to design the strategy in grouped tag cards.\n"
+        "4. Use **SQL** or **Terraform** to export the strategy.\n"
+        "5. Use **Apply to Workspace** to assign governed tags live."
     )
     st.markdown("---")
     st.markdown("#### Learn more — Unity Catalog tags documentation")
@@ -817,6 +864,105 @@ with tab_help:
         "* [ABAC requirements](https://docs.databricks.com/aws/en/data-governance/unity-catalog/abac/requirements/)\n"
         "* [CLI tag policy commands](https://docs.databricks.com/aws/en/dev-tools/cli/commands/)"
     )
+
+with tab_strategy:
+    st.markdown("#### Prompt-to-taxonomy designer")
+    st.caption(
+        "Describe your governance needs in plain language and generate a starter tag taxonomy. "
+        "Review and edit the suggestions below, then merge the ones you want into Tag Matrix. "
+        "Nothing here is applied to your workspace — it only stages rows into Tag Matrix."
+    )
+
+    st.session_state.setdefault("strategy_suggestions", [])
+    st.session_state.setdefault("strategy_suggestion_source", "")
+    st.session_state.setdefault("strategy_nonce", 0)
+
+    st.text_area(
+        "Describe your tagging needs",
+        key="strategy_prompt",
+        height=110,
+        placeholder=(
+            "e.g. \"We're a healthcare company. We need to track PII and HIPAA compliance at the column "
+            "and table level, attribute cost to business units, and flag which environment each catalog serves.\""
+        ),
+    )
+
+    gen_col, default_col = st.columns([1, 1])
+    with gen_col:
+        generate_clicked = st.button("Generate taxonomy", type="primary", use_container_width=True)
+    with default_col:
+        defaults_clicked = st.button("Use starter defaults instead", use_container_width=True)
+
+    if generate_clicked:
+        _prompt_text = st.session_state.get("strategy_prompt", "").strip()
+        if not _prompt_text:
+            st.warning("Describe your tagging needs above before generating.")
+        else:
+            with st.spinner("Generating taxonomy…"):
+                _gen_rows, _gen_errors, _raw = generate_taxonomy_from_prompt(_prompt_text)
+            if not _gen_rows:
+                st.error("Could not generate a taxonomy from the model response.")
+                for _err in _gen_errors:
+                    st.caption(f"⚠ {_err}")
+                st.info("Try rephrasing your prompt, or use the starter defaults below.")
+                st.session_state.strategy_suggestions = []
+            else:
+                for _err in _gen_errors:
+                    st.warning(_err)
+                st.session_state.strategy_suggestions = _gen_rows
+                st.session_state.strategy_suggestion_source = "model"
+                st.session_state.strategy_nonce += 1
+
+    if defaults_clicked:
+        st.session_state.strategy_suggestions = default_taxonomy_suggestion()
+        st.session_state.strategy_suggestion_source = "defaults"
+        st.session_state.strategy_nonce += 1
+
+    _suggestions = st.session_state.get("strategy_suggestions", [])
+    if _suggestions:
+        st.markdown("---")
+        _nonce = st.session_state.get("strategy_nonce", 0)
+        _source_label = "Generated by the model" if st.session_state.get("strategy_suggestion_source") == "model" else "Starter defaults"
+        st.markdown(f"##### Suggested tags — {len(_suggestions)} · {_source_label}")
+        st.caption("Uncheck any tag you don't want, adjust the key or values inline, then merge the rest into Tag Matrix.")
+
+        _selected_rows = []
+        for _i, _sug in enumerate(_suggestions):
+            with st.container(border=True):
+                _top_col, _chk_col = st.columns([5, 1])
+                with _chk_col:
+                    _keep = st.checkbox("Include", value=True, key=f"strategy_keep_{_nonce}_{_i}")
+                with _top_col:
+                    st.markdown(f"**{_sug.get('category', 'Suggested')}**")
+                    st.caption(_sug.get("desc", ""))
+                _edit_col1, _edit_col2 = st.columns([2, 3])
+                with _edit_col1:
+                    _edited_key = st.text_input("Tag key", value=_sug.get("key", ""), key=f"strategy_key_{_nonce}_{_i}")
+                with _edit_col2:
+                    _edited_values = st.text_input("Allowed values", value=_sug.get("values", ""), key=f"strategy_values_{_nonce}_{_i}")
+                _scope_label = ", ".join(s for s in SCOPE_OPTIONS if _sug.get(f"scope_{s}")) or "No scope"
+                st.caption(f"Governance: **{_sug.get('type', 'governed')}** · Scope: {_scope_label} · Owner: {_sug.get('owner') or '—'}")
+                if _keep:
+                    _merged = dict(_sug)
+                    _merged["key"] = _edited_key.strip()
+                    _merged["values"] = _edited_values.strip()
+                    _selected_rows.append(_merged)
+
+        st.markdown("---")
+        if st.button(f"Merge {len(_selected_rows)} tag(s) into Tag Matrix", type="primary", disabled=(len(_selected_rows) == 0)):
+            _new_rows = []
+            for _r in _selected_rows:
+                _new_row = {**_r, "row_id": st.session_state.next_row_id}
+                st.session_state.next_row_id += 1
+                _new_rows.append(_new_row)
+            st.session_state.tag_rows = pd.concat(
+                [st.session_state.tag_rows, pd.DataFrame(_new_rows)],
+                ignore_index=True,
+            )
+            st.session_state.strategy_suggestions = []
+            st.success(f"Merged {len(_new_rows)} tag(s) into Tag Matrix. Open the Tag Matrix tab to review.")
+    else:
+        st.caption("No suggestions yet. Describe your needs above and generate, or use the starter defaults.")
 
 with tab_matrix:
     st.markdown("#### Tag taxonomy")

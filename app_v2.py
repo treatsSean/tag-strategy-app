@@ -967,6 +967,20 @@ with st.sidebar:
 
 
 def _render_tab_help():
+    with st.container(border=True):
+        st.markdown("##### ⚠️ Not an official Databricks product")
+        st.markdown(
+            "This application is an independent, community-built tool. It is **not an official Databricks "
+            "product or feature**, and it is **not developed, tested, certified, or supported by Databricks**. "
+            "Using it does not create any warranty, support commitment, or SLA obligation on Databricks' part.\n\n"
+            "It is provided **\"as is,\" without warranties or conditions of any kind**, either express or "
+            "implied, including but not limited to warranties of merchantability, fitness for a particular "
+            "purpose, and non-infringement. **Use of this application is entirely at your own risk** — "
+            "Databricks disclaims all liability for any damages, direct or indirect, arising from its use.\n\n"
+            "Always independently validate anything this app produces — tag suggestions, SQL, Terraform, or "
+            "ABAC policy skeletons — against your own organization's governance, security, and compliance "
+            "requirements before applying it to a production Unity Catalog environment."
+        )
     st.markdown("#### What this app does")
     st.markdown(
         "The **Unity Catalog Tag Strategy Builder** helps you design a governed tagging taxonomy for Unity Catalog before rollout. "

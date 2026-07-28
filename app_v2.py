@@ -873,6 +873,15 @@ with st.sidebar:
         st.caption(f"Connected as **{user_key}**")
         st.caption("Runs with your own Unity Catalog permissions (user authorization) — you'll only ever see what you already have access to.")
 
+    st.markdown("##### Navigate")
+    st.radio(
+        "Section",
+        ["Home", "Build", "Policy and Compliance", "Implementation"],
+        key="nav_section",
+        label_visibility="collapsed",
+    )
+    st.divider()
+
     st.markdown("##### Target")
     st.caption("Populates SQL, Terraform, and Apply tabs.")
     catalogs = list_catalogs(w, user_key) if w else []
@@ -908,22 +917,7 @@ with st.sidebar:
     st.radio("Theme", ["Dark Header", "Light"], key="theme_mode", horizontal=True)
 
 
-tab_help, tab_strategy, tab_matrix, tab_validate, tab_import, tab_audit, tab_abac, tab_cost, tab_sql, tab_tf, tab_apply, tab_report = st.tabs([
-    "How to Use",
-    "Strategy",
-    "Tag Matrix",
-    "Validate",
-    "Import",
-    "Audit",
-    "ABAC",
-    "Cost Tags",
-    "SQL — apply tags",
-    "Terraform HCL",
-    "Apply to workspace",
-    "Tag report",
-])
-
-with tab_help:
+def _render_tab_help():
     st.markdown("#### What this app does")
     st.markdown(
         "The **Unity Catalog Tag Strategy Builder** helps you design a governed tagging taxonomy for Unity Catalog before rollout. "
@@ -933,11 +927,11 @@ with tab_help:
     st.markdown("---")
     st.markdown("#### How to use it")
     st.markdown(
-        "1. Use the **sidebar** to pick appearance and a target catalog/schema/table.\n"
-        "2. Optionally use **Strategy** to generate a starter taxonomy from a plain-language prompt.\n"
-        "3. Use **Tag Matrix** to design the strategy in grouped tag cards.\n"
-        "4. Use **SQL** or **Terraform** to export the strategy.\n"
-        "5. Use **Apply to Workspace** to assign governed tags live."
+        "1. Use the **sidebar Section** control to move between Home, Build, Policy and Compliance, and Implementation.\n"
+        "2. Pick a target catalog/schema/table and appearance in the sidebar — these carry across every section.\n"
+        "3. In **Build**, optionally use **Strategy** to generate a starter taxonomy, then design it in **Tag Matrix**.\n"
+        "4. In **Policy and Compliance**, audit live tag coverage and generate ABAC and cost-tag skeletons.\n"
+        "5. In **Implementation**, export **SQL** or **Terraform**, or use **Apply to Workspace** to assign tags live."
     )
     st.markdown("---")
     st.markdown("#### Learn more — Unity Catalog tags documentation")
@@ -949,7 +943,7 @@ with tab_help:
         "* [CLI tag policy commands](https://docs.databricks.com/aws/en/dev-tools/cli/commands/)"
     )
 
-with tab_strategy:
+def _render_tab_strategy():
     st.markdown("#### Prompt-to-taxonomy designer")
     st.caption(
         "Describe your governance needs in plain language and generate a starter tag taxonomy. "
@@ -1048,7 +1042,7 @@ with tab_strategy:
     else:
         st.caption("No suggestions yet. Describe your needs above and generate, or use the starter defaults.")
 
-with tab_matrix:
+def _render_tab_matrix():
     st.markdown("#### Tag taxonomy")
     st.caption("Grouped tag cards reduce scanning cost while keeping the full tagging strategy editable.")
 
@@ -1251,7 +1245,7 @@ with tab_matrix:
         label_visibility="collapsed",
     )
 
-with tab_validate:
+def _render_tab_validate():
     st.markdown("#### Validate your taxonomy")
     st.caption("Checks run against the rows in Tag Matrix: invalid characters, sensitive values, reserved keys, duplicate semantic keys, high-cardinality keys, and governance-mode fit.")
 
@@ -1289,7 +1283,7 @@ with tab_validate:
     else:
         st.caption("Add tag keys in Tag Matrix to see recommendations here.")
 
-with tab_import:
+def _render_tab_import():
     st.markdown("#### Import existing tag mappings")
     st.caption(
         "Upload a CSV/JSON file or paste a table mapping catalog/schema/table/column identifiers to "
@@ -1364,7 +1358,7 @@ with tab_import:
     else:
         st.caption("No rows parsed yet. Upload a file or paste a table above to see the dry-run plan.")
 
-with tab_audit:
+def _render_tab_audit():
     st.markdown("#### Coverage and gap analysis")
     st.caption(
         "Audits live Unity Catalog tag state against the required governed tags in Tag Matrix. "
@@ -1489,7 +1483,7 @@ with tab_audit:
                 st.warning(f"{len(_untagged_df)} of {len(_sensitive_df)} name-matched sensitive column(s) have no tags at all.")
                 st.dataframe(_untagged_df, use_container_width=True, hide_index=True)
 
-with tab_abac:
+def _render_tab_abac():
     st.markdown("#### ABAC policy candidates")
     st.caption(
         "Attribute-Based Access Control (ABAC) uses governed tags to drive row filters and column masks "
@@ -1531,7 +1525,7 @@ with tab_abac:
         st.download_button("Download ABAC policy SQL", _abac_sql, file_name="abac_policies.sql", mime="text/plain", type="primary")
         st.caption("Quotas: 10 policies per catalog, 10 per schema, 5 per table, max 3 `MATCH COLUMNS` conditions per policy.")
 
-with tab_cost:
+def _render_tab_cost():
     st.markdown("#### Cost tags")
     st.caption(
         "Governed tags classified as cost-attribution signals (cost center, chargeback, business unit). "
@@ -1586,7 +1580,7 @@ with tab_cost:
         )
         st.caption("Attach this as (or merge it into) a cluster policy so every cluster created under it carries the same cost-tag keys.")
 
-with tab_sql:
+def _render_tab_sql():
     st.markdown("#### SQL — apply tags to Unity Catalog")
     st.caption("Generated from your matrix. Run in a Databricks SQL editor or notebook (`%sql`).")
     cat = st.session_state.target_catalog
@@ -1598,7 +1592,7 @@ with tab_sql:
     st.code(sql_out, language="sql")
     st.download_button("Download SQL", sql_out, file_name="tag_strategy.sql", mime="text/plain", type="primary")
 
-with tab_tf:
+def _render_tab_tf():
     st.markdown("#### Terraform HCL — declarative tag management")
     st.caption("Resource blocks for the `databricks/databricks` provider.")
     st.warning("Verify `databricks_tag` resource availability and tag arguments against your provider version before applying.")
@@ -1609,7 +1603,7 @@ with tab_tf:
     st.code(tf_out, language="hcl")
     st.download_button("Download HCL", tf_out, file_name="tag_strategy.tf", mime="text/plain", type="primary")
 
-with tab_apply:
+def _render_tab_apply():
     st.markdown("#### Apply tags to your workspace")
     if not w:
         st.error("No workspace connection available. Deploy this as a Databricks App for live tag application.")
@@ -1706,7 +1700,7 @@ with tab_apply:
             else:
                 st.caption("Select at least one tag above to preview the SQL before applying.")
 
-with tab_report:
+def _render_tab_report():
     st.markdown("#### Tag report")
     st.caption("Live tags currently applied in Unity Catalog, scoped to the Catalog / Schema / Table selected in the sidebar.")
     cat = st.session_state.target_catalog
@@ -1775,6 +1769,37 @@ with tab_report:
         if report_frames:
             report_df = pd.concat(report_frames, ignore_index=True)
             st.download_button("Download report as CSV", report_df.to_csv(index=False), file_name="tag_report.csv", mime="text/csv")
+
+
+_NAV_SECTIONS = {
+    "Home": [
+        ("How to Use", _render_tab_help),
+        ("Strategy", _render_tab_strategy),
+    ],
+    "Build": [
+        ("Tag Matrix", _render_tab_matrix),
+        ("Validate", _render_tab_validate),
+    ],
+    "Policy and Compliance": [
+        ("Audit", _render_tab_audit),
+        ("ABAC", _render_tab_abac),
+        ("Cost Tags", _render_tab_cost),
+    ],
+    "Implementation": [
+        ("Import", _render_tab_import),
+        ("SQL — apply tags", _render_tab_sql),
+        ("Terraform HCL", _render_tab_tf),
+        ("Apply to workspace", _render_tab_apply),
+        ("Tag report", _render_tab_report),
+    ],
+}
+
+_active_section = st.session_state.get("nav_section", "Home")
+_section_items = _NAV_SECTIONS.get(_active_section, _NAV_SECTIONS["Home"])
+_section_tab_objs = st.tabs([_label for _label, _ in _section_items])
+for _tab_obj, (_label, _render_fn) in zip(_section_tab_objs, _section_items):
+    with _tab_obj:
+        _render_fn()
 
 st.divider()
 st.markdown(

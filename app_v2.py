@@ -195,39 +195,38 @@ st.markdown(f"""
   }}
   a, a:visited {{ color: #FF3621 !important; }}
 
-  /* Left-hand icon navigation: unselected items sit flush against the sidebar with muted text;
-     the selected item gets a soft color-wash overlay (not the CTA-red button fill) plus a thin
-     Lava accent bar on the left edge, mirroring the Databricks left-nav selected-state pattern. */
-  .st-key-nav_container .stButton > button {{
+  /* Left-hand icon navigation (built on st.radio, restyled to look like a nav list): unselected
+     items sit flush against the sidebar with muted text; the selected item gets a soft color-wash
+     overlay (not the CTA-red button fill used elsewhere) plus a thin Lava accent bar on the left
+     edge, mirroring the Databricks left-nav selected-state pattern. Scoped to the "Section" radio's
+     accessible label (aria-label survives label_visibility="collapsed") so the Theme radio elsewhere
+     in the sidebar is untouched. */
+  [data-testid="stSidebar"] [role="radiogroup"][aria-label="Section"] {{
+    gap: 2px !important;
+  }}
+  [data-testid="stSidebar"] [role="radiogroup"][aria-label="Section"] label {{
     width: 100%;
-    text-align: left !important;
-    justify-content: flex-start !important;
-    gap: 10px;
-    border: none !important;
     border-radius: 6px !important;
+    padding: 0.45rem 0.65rem !important;
+    margin-bottom: 0 !important;
     font-weight: 500 !important;
-    padding: 0.5rem 0.75rem !important;
-    margin-bottom: 2px !important;
-    box-shadow: none !important;
   }}
-  .st-key-nav_container .stButton > button[kind="secondary"] {{
-    background-color: transparent !important;
+  [data-testid="stSidebar"] [role="radiogroup"][aria-label="Section"] label > div:first-child {{
+    display: none !important;
+  }}
+  [data-testid="stSidebar"] [role="radiogroup"][aria-label="Section"] label div[data-testid="stMarkdownContainer"] p {{
     color: {_NAV_INACTIVE_TEXT} !important;
+    font-weight: 500 !important;
   }}
-  .st-key-nav_container .stButton > button[kind="secondary"]:hover {{
+  [data-testid="stSidebar"] [role="radiogroup"][aria-label="Section"] label:hover {{
     background-color: {_NAV_HOVER_BG} !important;
-    color: {_NAV_ACTIVE_TEXT} !important;
   }}
-  .st-key-nav_container .stButton > button[kind="primary"] {{
+  [data-testid="stSidebar"] [role="radiogroup"][aria-label="Section"] label:has(input:checked) {{
     background-color: {_NAV_ACTIVE_BG} !important;
-    color: {_NAV_ACTIVE_TEXT} !important;
     box-shadow: inset 3px 0 0 0 #FF3621 !important;
   }}
-  .st-key-nav_container .stButton > button[kind="primary"]:hover {{
-    background-color: {_NAV_ACTIVE_BG} !important;
-  }}
-  .st-key-nav_container [data-testid="stIconMaterial"] {{
-    color: inherit !important;
+  [data-testid="stSidebar"] [role="radiogroup"][aria-label="Section"] label:has(input:checked) div[data-testid="stMarkdownContainer"] p {{
+    color: {_NAV_ACTIVE_TEXT} !important;
   }}
 
   [data-testid="stCode"] {{
@@ -917,25 +916,19 @@ with st.sidebar:
         st.caption("Runs with your own Unity Catalog permissions (user authorization) — you'll only ever see what you already have access to.")
 
     st.markdown("##### Navigate")
-    st.session_state.setdefault("nav_section", "Home")
-    _NAV_ITEMS = [
-        ("Home", "home"),
-        ("Build", "build"),
-        ("Policy and Compliance", "policy"),
-        ("Implementation", "rocket_launch"),
-    ]
-    with st.container(key="nav_container"):
-        for _section_name, _section_icon in _NAV_ITEMS:
-            _is_active = st.session_state.nav_section == _section_name
-            if st.button(
-                _section_name,
-                key=f"nav_btn_{_section_name}",
-                icon=f":material/{_section_icon}:",
-                use_container_width=True,
-                type="primary" if _is_active else "secondary",
-            ):
-                st.session_state.nav_section = _section_name
-                st.rerun()
+    _NAV_SECTION_ICONS = {
+        "Home": "🏠",
+        "Build": "🛠️",
+        "Policy and Compliance": "🛡️",
+        "Implementation": "🚀",
+    }
+    st.radio(
+        "Section",
+        list(_NAV_SECTION_ICONS.keys()),
+        key="nav_section",
+        label_visibility="collapsed",
+        format_func=lambda _s: f"{_NAV_SECTION_ICONS[_s]}  {_s}",
+    )
     st.divider()
 
     st.markdown("##### Target")

@@ -23,7 +23,32 @@ from tag_engine import (
     parse_taxonomy_response,
     default_taxonomy_suggestion,
     suggest_abac_candidates,
+    GOVERNANCE_PATTERNS,
+    get_pattern_names,
+    get_pattern_tags,
+    match_patterns_to_prompt,
+    analyze_freeform_tags,
+    generate_dab_bundle,
 )
+import traceback
+import functools
+
+def safe_render(fn):
+    """Decorator that wraps render functions with error handling to prevent crashes."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            st.error(
+                f"Something went wrong rendering this section. "
+                f"Try refreshing, or select a different tab.\n\n"
+                f"**Error:** {type(e).__name__}: {e}"
+            )
+            with st.expander("Technical details", expanded=False):
+                st.code(traceback.format_exc(), language="text")
+    return wrapper
+
 
 SCOPE_OPTIONS = ["catalog", "schema", "table", "view", "column"]
 SCOPE_COLS = [f"scope_{s}" for s in SCOPE_OPTIONS]
@@ -921,7 +946,7 @@ with st.sidebar:
     _NAV_SECTION_ICONS = {
         "Home": "🏠",
         "Build": "🛠️",
-        "Policy and Compliance": "🛡️",
+        "Insights & Reporting": "📊",
         "Implementation": "🚀",
     }
     st.radio(
@@ -968,6 +993,7 @@ with st.sidebar:
     st.radio("Theme", ["Dark Header", "Light"], key="theme_mode", horizontal=True)
 
 
+@safe_render
 def _render_tab_help():
     with st.container(border=True):
         st.markdown("##### ⚠️ Not an official Databricks product")
@@ -1017,24 +1043,37 @@ def _render_tab_strategy():
     )
     with st.expander("How are these suggestions generated?"):
         st.markdown(
-            "Your prompt is sent to a Databricks-hosted foundation model (Claude Sonnet), instructed to "
-            "return a structured list of tag definitions — key, description, governance type, allowed "
-            "values, scope, and suggested ownership — as JSON. The app then validates and cleans up that "
-            "response (fixing key formatting, checking scopes and options against valid choices, filling in "
-            "safe defaults where something is missing or malformed) before showing it to you below.\n\n"
-            "The model only sees the words in your prompt — it has no visibility into your actual catalogs, "
-            "schemas, tables, or existing tags, and no knowledge of your organization's specific compliance "
-            "obligations or governance policy.\n\n"
-            "**These are AI-generated suggestions, not recommendations.** Treat every one as a rough starting "
-            "point at best — review, edit, or discard freely. Don't merge anything into Tag Matrix, and "
-            "especially don't apply anything to Unity Catalog, without validating it against your "
-            "organization's actual governance, compliance, and data classification requirements."
+            "Your prompt is matched against a curated **governance patterns library** covering healthcare (HIPAA), "
+            "financial services (SOX/PCI), retail (CCPA/GDPR), technology (SOC2), government (FedRAMP/FISMA), and "
+            "universal best practices. Matching patterns are combined with a Databricks-hosted foundation model "
+            "(Claude Sonnet) to produce a tailored taxonomy.\n\n"
+            "The model sees your prompt plus relevant best-practice patterns — it has no visibility into your "
+            "actual catalogs, schemas, tables, or existing tags.\n\n"
+            "**These are AI-generated suggestions, not recommendations.** Treat every one as a starting point "
+            "— review, edit, or discard freely. Don't apply anything to Unity Catalog without validating it "
+            "against your organization's actual governance and compliance requirements."
         )
 
     st.session_state.setdefault("strategy_suggestions", [])
     st.session_state.setdefault("strategy_suggestion_source", "")
     st.session_state.setdefault("strategy_nonce", 0)
 
+    # Governance patterns quick-start
+    st.markdown("##### Start from industry best practices")
+    st.caption("Select a curated pattern to pre-fill proven governance tags for your industry, or describe your needs below.")
+    pattern_names = get_pattern_names()
+    pattern_cols = st.columns(min(len(pattern_names), 3))
+    for i, (pkey, plabel) in enumerate(pattern_names):
+        col_idx = i % 3
+        with pattern_cols[col_idx]:
+            if st.button(plabel, key=f"pattern_{pkey}", use_container_width=True):
+                st.session_state.strategy_suggestions = get_pattern_tags(pkey)
+                st.session_state.strategy_suggestion_source = f"pattern:{pkey}"
+                st.session_state.strategy_nonce += 1
+                st.rerun()
+
+    st.markdown("---")
+    st.markdown("##### Or describe your needs in plain language")
     st.text_area(
         "Describe your tagging needs",
         key="strategy_prompt",
@@ -1056,20 +1095,44 @@ def _render_tab_strategy():
         if not _prompt_text:
             st.warning("Describe your tagging needs above before generating.")
         else:
-            with st.spinner("Generating taxonomy…"):
-                _gen_rows, _gen_errors, _raw = generate_taxonomy_from_prompt(_prompt_text)
+            # Match against governance patterns for context enrichment
+            matched_patterns = match_patterns_to_prompt(_prompt_text)
+            pattern_context = ""
+            if matched_patterns:
+                top_pattern = GOVERNANCE_PATTERNS.get(matched_patterns[0], {})
+                if top_pattern:
+                    pattern_tags = top_pattern.get("tags", [])
+                    pattern_context = (
+                        f"\n\nRelevant industry pattern: {top_pattern['label']}\n"
+                        f"Reference tags from best practices: {json.dumps([{'key': t['key'], 'category': t['category'], 'scopes': t['scopes']} for t in pattern_tags[:5]], indent=None)}"
+                    )
+
+            with st.spinner("Generating taxonomy (with best-practice context)…"):
+                _gen_rows, _gen_errors, _raw = generate_taxonomy_from_prompt(_prompt_text + pattern_context)
             if not _gen_rows:
-                st.error("Could not generate a taxonomy from the model response.")
-                for _err in _gen_errors:
-                    st.caption(f"⚠ {_err}")
-                st.info("Try rephrasing your prompt, or use the starter defaults below.")
-                st.session_state.strategy_suggestions = []
+                # Fallback: use matched patterns directly
+                if matched_patterns:
+                    st.warning("Model generation failed. Falling back to matched industry patterns.")
+                    fallback_rows = []
+                    for pk in matched_patterns[:2]:
+                        fallback_rows.extend(get_pattern_tags(pk))
+                    st.session_state.strategy_suggestions = fallback_rows
+                    st.session_state.strategy_suggestion_source = f"pattern_fallback:{matched_patterns[0]}"
+                    st.session_state.strategy_nonce += 1
+                else:
+                    st.error("Could not generate a taxonomy from the model response.")
+                    for _err in _gen_errors:
+                        st.caption(f"⚠ {_err}")
+                    st.info("Try rephrasing your prompt, or use an industry pattern above.")
+                    st.session_state.strategy_suggestions = []
             else:
                 for _err in _gen_errors:
                     st.warning(_err)
                 st.session_state.strategy_suggestions = _gen_rows
                 st.session_state.strategy_suggestion_source = "model"
                 st.session_state.strategy_nonce += 1
+                if matched_patterns:
+                    st.caption(f"🎯 Matched pattern: {GOVERNANCE_PATTERNS.get(matched_patterns[0], {}).get('label', '')}")
 
     if defaults_clicked:
         st.session_state.strategy_suggestions = default_taxonomy_suggestion()
@@ -1856,6 +1919,442 @@ def _render_tab_report():
             st.download_button("Download report as CSV", report_df.to_csv(index=False), file_name="tag_report.csv", mime="text/csv")
 
 
+@safe_render
+def _render_tab_freeform_discovery():
+    """Discover freeform tags in the environment and recommend governance."""
+    st.markdown("#### Freeform → Governed Discovery")
+    st.caption(
+        "Scans live tags across the selected catalog and identifies freeform (ad-hoc) tags that are not part of "
+        "your governed taxonomy. Shows which ones should be promoted to governed based on usage patterns, "
+        "value cardinality, and compliance signals."
+    )
+    _cat = st.session_state.target_catalog
+    if not w:
+        st.error("No workspace connection. Deploy as a Databricks App for live tag discovery.")
+        return
+    if not _cat:
+        st.info("Select a catalog in the sidebar to scan for freeform tags.")
+        return
+
+    if st.button("Scan for freeform tags", type="primary", key="freeform_scan"):
+        st.session_state["freeform_scan_running"] = True
+        st.rerun()
+
+    if not st.session_state.get("freeform_scan_running"):
+        st.caption("Click scan to analyze live tags against your taxonomy.")
+        return
+
+    with st.spinner("Scanning live tags..."):
+        schema_tags_df = audit_all_schema_tags(w, _cat, user_key)
+        table_tags_df = audit_all_table_tags(w, _cat, user_key)
+        column_tags_df = audit_all_column_tags(w, _cat, user_key)
+
+        live_records = []
+        for _, r in schema_tags_df.iterrows():
+            live_records.append({"tag_name": r["tag_name"], "tag_value": r.get("tag_value", ""), "scope": "schema", "object_id": r["schema_name"]})
+        for _, r in table_tags_df.iterrows():
+            live_records.append({"tag_name": r["tag_name"], "tag_value": r.get("tag_value", ""), "scope": "table", "object_id": f"{r['schema_name']}.{r['table_name']}"})
+        for _, r in column_tags_df.iterrows():
+            live_records.append({"tag_name": r["tag_name"], "tag_value": r.get("tag_value", ""), "scope": "column", "object_id": f"{r['schema_name']}.{r['table_name']}.{r['column_name']}"})
+
+    taxonomy_rows = st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records")
+    results = analyze_freeform_tags(live_records, taxonomy_rows)
+
+    if not results:
+        st.success("No freeform tags found outside your taxonomy. Your governed coverage is comprehensive!")
+        st.session_state["freeform_scan_running"] = False
+        return
+
+    m1, m2, m3 = st.columns(3)
+    high_priority = [r for r in results if r["priority"] == "high"]
+    med_priority = [r for r in results if r["priority"] == "medium"]
+    m1.metric("Freeform tags found", len(results))
+    m2.metric("Should be governed", len(high_priority), help="Compliance/ABAC/cost signals detected")
+    m3.metric("Worth reviewing", len(med_priority), help="High usage or bounded value sets")
+
+    st.markdown("---")
+    for result in results:
+        priority_colors = {"high": "🔴", "medium": "🟡", "low": "⚪"}
+        icon = priority_colors.get(result["priority"], "⚪")
+        with st.expander(f"{icon} `{result['key']}` — {result['recommendation']} ({result['usage_count']} objects)"):
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.markdown(f"**Recommendation:** Migrate to **{result['recommendation']}**")
+                st.caption(result["rationale"])
+                if result["unique_values"]:
+                    val_display = ", ".join(result["unique_values"])
+                    if result["total_unique_values"] > 10:
+                        val_display += f" ... (+{result['total_unique_values'] - 10} more)"
+                    st.markdown(f"**Observed values:** `{val_display}`")
+                if result["scopes"]:
+                    st.markdown(f"**Used at scopes:** {', '.join(result['scopes'])}")
+            with c2:
+                st.markdown(f"**Priority:** {result['priority'].title()}")
+                st.markdown(f"**Objects:** {result['usage_count']}")
+                if result["objects_sample"]:
+                    st.caption("Sample objects:")
+                    for obj in result["objects_sample"][:3]:
+                        st.caption(f"• `{obj}`")
+
+            if st.button(f"Add `{result['key']}` to Tag Matrix as governed", key=f"promote_{result['key']}"):
+                new_row = {
+                    "category": "Promoted from freeform",
+                    "desc": f"Discovered freeform tag promoted to governed. {result['rationale'][:100]}",
+                    "type": "governed",
+                    "key": result["key"],
+                    "values": ", ".join(result["unique_values"][:8]),
+                    **{f"scope_{s}": (s in result["scopes"]) for s in SCOPE_OPTIONS},
+                    "creates": "Central governance",
+                    "assigns": "Practitioners / team leads",
+                    "automation": "Manual",
+                    "owner": "",
+                    "row_id": st.session_state.next_row_id,
+                }
+                st.session_state.next_row_id += 1
+                st.session_state.tag_rows = pd.concat(
+                    [st.session_state.tag_rows, pd.DataFrame([new_row])], ignore_index=True
+                )
+                st.success(f"Added `{result['key']}` to Tag Matrix.")
+                st.rerun()
+
+    st.session_state["freeform_scan_running"] = False
+
+
+@safe_render
+def _render_tab_object_tags():
+    """Show all tags on a specific object."""
+    st.markdown("#### Tags per Object")
+    st.caption(
+        "View the complete tag surface of any catalog object. Shows direct tags at every level "
+        "and gaps where required governed tags are missing."
+    )
+    _cat = st.session_state.target_catalog
+    _sch = st.session_state.target_schema
+    _tbl = st.session_state.target_table
+
+    if not w:
+        st.error("No workspace connection. Deploy as a Databricks App for live tag inspection.")
+        return
+    if not _cat:
+        st.info("Select a catalog in the sidebar to browse object tags.")
+        return
+
+    obj_path = _cat
+    if _sch:
+        obj_path = f"{_cat}.{_sch}"
+    if _tbl:
+        obj_path = f"{_cat}.{_sch}.{_tbl}"
+    st.markdown(f"**Inspecting:** `{obj_path}`")
+
+    tag_layers = []
+    cat_tags_df = get_catalog_tags_report(w, _cat, user_key)
+    if not cat_tags_df.empty:
+        for _, r in cat_tags_df.iterrows():
+            tag_layers.append({"level": "📦 Catalog", "object": _cat, "tag_key": r["tag_name"], "tag_value": r.get("tag_value", ""), "source": "direct"})
+
+    if _sch:
+        sch_tags_df = get_schema_tags_report(w, _cat, _sch, user_key)
+        if not sch_tags_df.empty:
+            for _, r in sch_tags_df.iterrows():
+                tag_layers.append({"level": "🗂️ Schema", "object": f"{_cat}.{_sch}", "tag_key": r["tag_name"], "tag_value": r.get("tag_value", ""), "source": "direct"})
+
+    if _tbl:
+        tbl_tags_df = get_table_tags_report(w, _cat, _sch, _tbl, user_key)
+        if not tbl_tags_df.empty:
+            for _, r in tbl_tags_df.iterrows():
+                tag_layers.append({"level": "📊 Table", "object": f"{_cat}.{_sch}.{_tbl}", "tag_key": r["tag_name"], "tag_value": r.get("tag_value", ""), "source": "direct"})
+
+        col_tags_df = get_column_tags_report(w, _cat, _sch, _tbl, user_key)
+        if not col_tags_df.empty:
+            for _, r in col_tags_df.iterrows():
+                tag_layers.append({"level": "🔤 Column", "object": f"{r.get('column_name', '')}", "tag_key": r["tag_name"], "tag_value": r.get("tag_value", ""), "source": "direct"})
+
+    if not tag_layers:
+        st.warning(f"No tags found on `{obj_path}` or its parent/child objects.")
+    else:
+        tag_df = pd.DataFrame(tag_layers)
+        st.dataframe(tag_df, use_container_width=True, hide_index=True, column_config={
+            "level": st.column_config.TextColumn("Level", width="small"),
+            "object": st.column_config.TextColumn("Object", width="medium"),
+            "tag_key": st.column_config.TextColumn("Tag Key", width="medium"),
+            "tag_value": st.column_config.TextColumn("Value", width="medium"),
+            "source": st.column_config.TextColumn("Source", width="small"),
+        })
+
+    st.markdown("---")
+    st.markdown("##### Missing required tags")
+    taxonomy_rows = st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records")
+    present_keys = {row["tag_key"] for row in tag_layers} if tag_layers else set()
+
+    missing_tags = []
+    for row in taxonomy_rows:
+        key = (row.get("key") or "").strip()
+        if not key or row.get("type") != "governed":
+            continue
+        scopes = [s for s in SCOPE_OPTIONS if row.get(f"scope_{s}")]
+        if _tbl and any(s in scopes for s in ["table", "view"]):
+            if key not in present_keys:
+                missing_tags.append({"key": key, "expected_scope": "table", "category": row.get("category", "")})
+        elif _sch and not _tbl and "schema" in scopes:
+            if key not in present_keys:
+                missing_tags.append({"key": key, "expected_scope": "schema", "category": row.get("category", "")})
+        elif not _sch and "catalog" in scopes:
+            if key not in present_keys:
+                missing_tags.append({"key": key, "expected_scope": "catalog", "category": row.get("category", "")})
+
+    if missing_tags:
+        st.warning(f"{len(missing_tags)} required governed tag(s) missing from this object.")
+        st.dataframe(pd.DataFrame(missing_tags), use_container_width=True, hide_index=True)
+    else:
+        st.success("All required governed tags are present on this object.")
+
+
+@safe_render
+def _render_tab_risk_viz():
+    """Visualize gap/risk areas with charts."""
+    st.markdown("#### Risk & Coverage Visualization")
+    st.caption("Visual overview of tag coverage gaps, risk concentrations, and governance health across the catalog.")
+
+    _cat = st.session_state.target_catalog
+    if not w:
+        st.error("No workspace connection. Deploy as a Databricks App.")
+        return
+    if not _cat:
+        st.info("Select a catalog in the sidebar.")
+        return
+
+    taxonomy_rows = st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records")
+    _req_table_keys = compute_required_keys(taxonomy_rows, "table")
+    _req_schema_keys = compute_required_keys(taxonomy_rows, "schema")
+
+    if not _req_table_keys and not _req_schema_keys:
+        st.info("Define governed tags with table or schema scope in Tag Matrix to see coverage visualization.")
+        return
+
+    tables_df = audit_all_tables(w, _cat, user_key)
+    table_tags_df = audit_all_table_tags(w, _cat, user_key)
+    schema_tags_df = audit_all_schema_tags(w, _cat, user_key)
+    schemas = list_schemas(w, _cat, user_key) if w else []
+
+    if _req_schema_keys and schemas:
+        st.markdown("##### Schema Coverage Heatmap")
+        schema_tag_records = [
+            {"object_id": r["schema_name"], "tag_name": r["tag_name"]}
+            for _, r in schema_tags_df.iterrows()
+        ]
+        schema_matrix_data = []
+        for schema in schemas:
+            for key in _req_schema_keys:
+                has_tag = any(r["object_id"] == schema and r["tag_name"] == key for r in schema_tag_records)
+                schema_matrix_data.append({"Schema": schema, "Tag Key": key, "Status": "✅" if has_tag else "❌"})
+
+        if schema_matrix_data:
+            matrix_df = pd.DataFrame(schema_matrix_data)
+            pivot = matrix_df.pivot(index="Schema", columns="Tag Key", values="Status").fillna("❌")
+            st.dataframe(pivot, use_container_width=True)
+            st.caption("✅ = Tag present • ❌ = Tag missing")
+
+    if _req_table_keys and not tables_df.empty:
+        st.markdown("##### Table Coverage Distribution")
+        table_objs = [f"{r['table_schema']}.{r['table_name']}" for _, r in tables_df.iterrows()]
+        table_tag_records = [
+            {"object_id": f"{r['schema_name']}.{r['table_name']}", "tag_name": r["tag_name"]}
+            for _, r in table_tags_df.iterrows()
+        ]
+
+        coverage_counts = []
+        for obj in table_objs:
+            present = sum(1 for key in _req_table_keys if any(r["object_id"] == obj and r["tag_name"] == key for r in table_tag_records))
+            pct = round(100 * present / len(_req_table_keys)) if _req_table_keys else 0
+            coverage_counts.append({"table": obj, "coverage_pct": pct, "tags_present": present, "tags_required": len(_req_table_keys)})
+
+        cov_df = pd.DataFrame(coverage_counts)
+
+        # Bucket into categories for a cleaner chart
+        def _bucket(pct):
+            if pct == 100:
+                return "100% (complete)"
+            elif pct >= 75:
+                return "75-99%"
+            elif pct >= 50:
+                return "50-74%"
+            elif pct >= 25:
+                return "25-49%"
+            elif pct > 0:
+                return "1-24%"
+            else:
+                return "0% (none)"
+
+        cov_df["bucket"] = cov_df["coverage_pct"].apply(_bucket)
+        bucket_order = ["100% (complete)", "75-99%", "50-74%", "25-49%", "1-24%", "0% (none)"]
+        bucket_counts = cov_df["bucket"].value_counts().reindex(bucket_order, fill_value=0).reset_index()
+        bucket_counts.columns = ["Coverage Band", "Table Count"]
+        st.bar_chart(bucket_counts, x="Coverage Band", y="Table Count")
+
+        fully_covered = len(cov_df[cov_df["coverage_pct"] == 100])
+        no_coverage = len(cov_df[cov_df["coverage_pct"] == 0])
+        partial = len(cov_df) - fully_covered - no_coverage
+
+        r1, r2, r3 = st.columns(3)
+        r1.metric("✅ Fully tagged", fully_covered)
+        r2.metric("⚠️ Partial", partial)
+        r3.metric("🛑 No tags", no_coverage)
+
+        if no_coverage > 0 or partial > 0:
+            st.markdown("##### Highest Risk Tables")
+            worst = cov_df.nsmallest(min(15, len(cov_df)), "coverage_pct")
+            st.dataframe(worst, use_container_width=True, hide_index=True)
+
+    # Sensitive columns risk
+    st.markdown("---")
+    st.markdown("##### Sensitive Column Risk")
+    sensitive_df = audit_sensitive_columns(w, _cat, user_key)
+    col_tags_df_all = audit_all_column_tags(w, _cat, user_key)
+
+    if sensitive_df.empty:
+        st.caption("No sensitive-name columns detected.")
+    else:
+        tagged_cols = set(
+            zip(col_tags_df_all.get("schema_name", []), col_tags_df_all.get("table_name", []), col_tags_df_all.get("column_name", []))
+        ) if not col_tags_df_all.empty else set()
+
+        sensitive_df = sensitive_df.copy()
+        sensitive_df["tagged"] = sensitive_df.apply(
+            lambda r: (r["table_schema"], r["table_name"], r["column_name"]) in tagged_cols, axis=1
+        )
+        tagged_count = int(sensitive_df["tagged"].sum())
+        untagged_count = len(sensitive_df) - tagged_count
+
+        risk_data = pd.DataFrame({"Status": ["Tagged", "Untagged (at risk)"], "Count": [tagged_count, untagged_count]})
+        st.bar_chart(risk_data, x="Status", y="Count")
+        if untagged_count > 0:
+            st.warning(f"{untagged_count} sensitive columns have no governance tags — potential compliance risk.")
+
+
+@safe_render
+def _render_tab_abac_report():
+    """ABAC reporting — which tags are associated with policies vs unassigned/legacy."""
+    st.markdown("#### ABAC Policy & Tag Association")
+    st.caption(
+        "Shows which governed tags are candidates for or currently used in ABAC policies (row filters / column masks), "
+        "versus tags that are unassigned or legacy."
+    )
+
+    _abac_rows = st.session_state.get("tag_rows", pd.DataFrame(columns=COLUMNS)).to_dict("records")
+    _abac_candidates = suggest_abac_candidates(_abac_rows)
+    governed_rows = [r for r in _abac_rows if (r.get("type") or "").strip() == "governed" and (r.get("key") or "").strip()]
+
+    if not governed_rows:
+        st.info("Add governed tags in Tag Matrix to see ABAC analysis.")
+        return
+
+    abac_keys = {c["key"] for c in _abac_candidates}
+    policy_ready = []
+    not_policy_ready = []
+
+    for row in governed_rows:
+        key = row.get("key", "").strip()
+        if key in abac_keys:
+            cand = next(c for c in _abac_candidates if c["key"] == key)
+            policy_ready.append({
+                "key": key,
+                "category": row.get("category", ""),
+                "policy_types": ", ".join("Column mask" if pt == "column_mask" else "Row filter" for pt in cand["policy_types"]),
+                "rationale": cand["rationale"],
+                "status": "🟢 ABAC-ready",
+            })
+        else:
+            not_policy_ready.append({
+                "key": key,
+                "category": row.get("category", ""),
+                "policy_types": "—",
+                "rationale": "No ABAC signal detected.",
+                "status": "⚪ Not policy-linked",
+            })
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total governed tags", len(governed_rows))
+    c2.metric("ABAC-ready", len(policy_ready))
+    c3.metric("Not policy-linked", len(not_policy_ready))
+
+    st.markdown("---")
+    if policy_ready:
+        st.markdown("##### 🟢 Tags ready for ABAC policies")
+        st.dataframe(pd.DataFrame(policy_ready), use_container_width=True, hide_index=True)
+
+    if not_policy_ready:
+        st.markdown("##### ⚪ Tags not linked to policies")
+        st.caption("These tags serve discovery, cost, or organizational purposes — not driving access control.")
+        st.dataframe(pd.DataFrame(not_policy_ready), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.markdown("##### Generate ABAC policy skeletons")
+    _abac_cat = st.session_state.target_catalog
+    _abac_sch = st.session_state.target_schema
+    if _abac_cat:
+        _abac_sql = generate_abac_sql(_abac_cat, _abac_sch)
+        st.code(_abac_sql, language="sql")
+        st.download_button("Download ABAC policy SQL", _abac_sql, file_name="abac_policies.sql", mime="text/plain", type="primary")
+    else:
+        st.caption("Select a catalog in the sidebar to generate policy SQL.")
+
+
+@safe_render
+def _render_tab_bundle():
+    """Generate a Declarative Automation Bundle for deploying tag SQL."""
+    st.markdown("#### Automation Bundle")
+    st.caption(
+        "Generates a Declarative Automation Bundle (DAB) that wraps your tag SQL into a scheduled Lakeflow Job. "
+        "Download the bundle, configure your warehouse ID, and deploy with `databricks bundle deploy`."
+    )
+
+    cat = st.session_state.target_catalog
+    sch = st.session_state.target_schema
+    tbl = st.session_state.target_table
+
+    if not any([cat, sch, tbl]):
+        st.info("Select a catalog/schema/table in the sidebar to generate a deployment bundle.")
+        return
+
+    sql_out = generate_sql(cat, sch, tbl)
+    job_name = st.text_input("Job name", value=f"tag-apply-{cat or 'catalog'}", key="bundle_job_name")
+
+    if st.button("Generate bundle", type="primary", key="gen_bundle"):
+        bundle_files = generate_dab_bundle(sql_out, cat, sch, tbl, job_name)
+
+        st.success("Bundle generated! Download the files below.")
+        for filename, content in bundle_files.items():
+            lang = "yaml" if filename.endswith(".yml") else ("sql" if filename.endswith(".sql") else "markdown")
+            with st.expander(f"📄 {filename}", expanded=(filename == "databricks.yml")):
+                st.code(content, language=lang)
+
+        combined = ""
+        for filename, content in bundle_files.items():
+            combined += f"# ====== {filename} ======\n{content}\n\n"
+
+        st.download_button(
+            "Download all bundle files",
+            combined,
+            file_name=f"{job_name}_bundle.txt",
+            mime="text/plain",
+            type="primary",
+        )
+        st.caption(
+            "**Tip:** Extract each section into its own file preserving directory structure, "
+            "then run `databricks bundle deploy --target dev` from the bundle root."
+        )
+
+    st.markdown("---")
+    st.markdown("##### What the bundle creates")
+    st.markdown(
+        "1. **`databricks.yml`** — Bundle manifest with job definition, schedule (daily 06:00 UTC), and target configs\n"
+        "2. **`src/apply_tags.sql`** — Your tag SQL statements\n"
+        "3. **`README.md`** — Deployment instructions\n\n"
+        "The job uses a SQL warehouse (via `warehouse_id` variable) and supports dev/prod targets "
+        "with service principal isolation in production."
+    )
+
+
 _NAV_SECTIONS = {
     "Home": [
         ("How to Use", _render_tab_help),
@@ -1865,14 +2364,18 @@ _NAV_SECTIONS = {
         ("Tag Matrix", _render_tab_matrix),
         ("Validate", _render_tab_validate),
     ],
-    "Policy and Compliance": [
-        ("Audit", _render_tab_audit),
-        ("ABAC", _render_tab_abac),
+    "Insights & Reporting": [
+        ("Coverage Audit", _render_tab_audit),
+        ("Risk Visualization", _render_tab_risk_viz),
+        ("Freeform → Governed", _render_tab_freeform_discovery),
+        ("Tags per Object", _render_tab_object_tags),
+        ("ABAC & Policies", _render_tab_abac_report),
         ("Cost Tags", _render_tab_cost),
     ],
     "Implementation": [
         ("Import", _render_tab_import),
         ("SQL — apply tags", _render_tab_sql),
+        ("Automation Bundle", _render_tab_bundle),
         ("Terraform HCL", _render_tab_tf),
         ("Apply to workspace", _render_tab_apply),
         ("Tag report", _render_tab_report),

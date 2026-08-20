@@ -545,28 +545,34 @@ _TAXONOMY_VALID_AUTOMATION = [
     "Propagation only",
 ]
 
-TAXONOMY_SYSTEM_PROMPT = """You are a Unity Catalog data governance expert. Given a natural-language description of an
-organization's tagging needs, produce a JSON array of tag definitions. Return ONLY a JSON array — no prose, no
-markdown code fences, no surrounding object.
+TAXONOMY_SYSTEM_PROMPT = """You are a Unity Catalog data governance expert and tagging strategist. Given a natural-language
+description of an organization's tagging needs (possibly enriched with industry best-practice context), produce a JSON
+array of tag definitions. Return ONLY a valid JSON array — no prose, no markdown code fences, no surrounding object.
 
 Each element must be an object with exactly these fields:
-- "category": string, short human label grouping this tag (e.g. "Classification / Sensitivity")
-- "desc": string, one sentence describing what the tag captures and why it matters
-- "type": either "governed" or "ungoverned"
-- "key": string, snake_case tag key (lowercase letters, digits, underscores only — no spaces)
-- "values": comma-separated string of allowed values, or "" if open-ended / free text
-- "scopes": array of zero or more of "catalog", "schema", "table", "view", "column" indicating where the tag applies
+- "category": string, short human label grouping this tag (e.g. "Classification / Sensitivity", "PII", "Compliance")
+- "desc": string, one sentence describing what the tag captures, WHY it matters, and HOW it drives governance actions
+- "type": either "governed" (org-wide, enforced) or "ungoverned" (team-local, flexible)
+- "key": string, snake_case tag key (lowercase letters, digits, underscores only — no spaces, no hyphens)
+- "values": comma-separated string of allowed values (use clear, short tokens: e.g. "public, internal, confidential, restricted"), or "" for open-ended
+- "scopes": array of one or more of "catalog", "schema", "table", "view", "column" — be specific about WHERE this tag belongs
 - "creates": one of "Central governance", "Domain leads", "Team leads", "Anyone"
 - "assigns": one of "Governance team only", "Service principals / admins", "Stewards / service principals",
   "Automation / stewards", "Governance team / owners", "Team leads / finance ops", "Practitioners / team leads",
   "Practitioners", "Anyone"
 - "automation": one of "None", "Manual", "Manual + propagation", "Audit & review candidates",
   "AMM surfaces candidates", "Auto-detect candidates", "Auto-assign (no review)", "Propagation only"
-- "owner": string, a suggested owning team/role, or "" if unknown
+- "owner": string, a specific suggested owning team/role (e.g. "Privacy Office", "Data Governance Council", "Platform Engineering"), or "" if unknown
 
-Produce between 1 and 12 tag definitions that best address the request. Prefer well-known Unity Catalog governance
-patterns (classification/sensitivity, PII, compliance, domain, ownership, cost center, lifecycle/certification) when
-relevant, but tailor keys and values to what the user actually described."""
+Guidelines:
+- Produce between 5 and 12 tag definitions covering the full spectrum of the request
+- ALWAYS include at least one tag from each relevant governance pillar: classification, ownership, compliance, lifecycle
+- For PII/PHI tags, use column scope; for compliance/domain tags use schema or catalog scope; for lifecycle use table+schema
+- Tags that should drive ABAC policies (access control) need sensitivity, compliance, or segmentation signals
+- Cost-attribution tags should be at catalog or schema scope for chargeback aggregation
+- Prefer governed type for anything that affects compliance, security, cost reporting, or discoverability
+- Set automation appropriately: PII detection = "Auto-detect candidates", lifecycle = "AMM surfaces candidates", domain = "Manual"
+- Make descriptions actionable: explain what governance action this tag enables (e.g. drives column masking, triggers retention policy)"""
 
 
 def build_taxonomy_messages(user_prompt):
@@ -732,6 +738,373 @@ _ABAC_SEGMENTATION_HINTS = ["region", "department", "business_unit", "geo", "ten
 def _abac_text_matches(text, hints):
     t = (text or "").lower()
     return any(h in t for h in hints)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Governance Patterns Library (curated best-practice taxonomies by industry)
+# ─────────────────────────────────────────────────────────────────────────
+
+GOVERNANCE_PATTERNS = {
+    "healthcare": {
+        "label": "Healthcare / Life Sciences (HIPAA)",
+        "description": "HIPAA-aligned tagging for PHI, BAA status, minimum necessary, and research datasets.",
+        "tags": [
+            {"category": "PHI Classification", "key": "phi_level", "values": "none, limited_phi, full_phi, de_identified", "scopes": ["table", "column"], "type": "governed", "creates": "Central governance", "assigns": "Stewards / service principals", "automation": "Auto-detect candidates", "owner": "Privacy Office", "desc": "Protected Health Information level. Drives HIPAA minimum-necessary access controls."},
+            {"category": "Compliance / Regulatory", "key": "hipaa_safeguard", "values": "administrative, physical, technical", "scopes": ["table", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Service principals / admins", "automation": "Manual + propagation", "owner": "Compliance", "desc": "Which HIPAA safeguard category applies to this asset."},
+            {"category": "Data Retention", "key": "retention_years", "values": "6, 7, 10, indefinite", "scopes": ["table"], "type": "governed", "creates": "Central governance", "assigns": "Governance team / owners", "automation": "Manual", "owner": "Records Management", "desc": "HIPAA minimum retention period for this dataset."},
+            {"category": "Access Control", "key": "baa_required", "values": "yes, no", "scopes": ["schema", "table"], "type": "governed", "creates": "Central governance", "assigns": "Governance team only", "automation": "Manual + propagation", "owner": "Legal", "desc": "Whether accessing this data requires a Business Associate Agreement."},
+            {"category": "Research", "key": "irb_status", "values": "approved, pending, exempt, not_applicable", "scopes": ["schema", "table"], "type": "governed", "creates": "Domain leads", "assigns": "Practitioners / team leads", "automation": "Manual", "owner": "Research Governance", "desc": "Institutional Review Board approval status for research datasets."},
+        ],
+    },
+    "financial_services": {
+        "label": "Financial Services (SOX / PCI / Basel)",
+        "description": "SOX controls, PCI-DSS cardholder data, Basel risk classifications, and audit trail requirements.",
+        "tags": [
+            {"category": "SOX Controls", "key": "sox_control", "values": "itgc, application, entity_level, not_applicable", "scopes": ["table", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Service principals / admins", "automation": "Manual + propagation", "owner": "Internal Audit", "desc": "SOX control classification for financial reporting data."},
+            {"category": "PCI Classification", "key": "pci_scope", "values": "in_scope, out_of_scope, connected_to", "scopes": ["table", "column"], "type": "governed", "creates": "Central governance", "assigns": "Stewards / service principals", "automation": "Auto-detect candidates", "owner": "PCI QSA Team", "desc": "PCI-DSS scope classification for cardholder data environments."},
+            {"category": "Risk Classification", "key": "data_criticality", "values": "critical, high, medium, low", "scopes": ["table", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Governance team / owners", "automation": "AMM surfaces candidates", "owner": "Risk Management", "desc": "Business criticality for BCP/DR prioritization and Basel operational risk."},
+            {"category": "Audit", "key": "audit_trail", "values": "full, partial, none", "scopes": ["table"], "type": "governed", "creates": "Central governance", "assigns": "Automation / stewards", "automation": "Auto-assign (no review)", "owner": "Internal Audit", "desc": "Level of change-data-capture audit trail maintained."},
+            {"category": "Lineage", "key": "source_system", "values": "", "scopes": ["table"], "type": "governed", "creates": "Central governance", "assigns": "Practitioners", "automation": "Manual", "owner": "Data Engineering", "desc": "Upstream system of record for lineage tracking and reconciliation."},
+        ],
+    },
+    "retail_ecommerce": {
+        "label": "Retail / E-commerce (CCPA / GDPR)",
+        "description": "Consumer privacy, consent management, personalization signals, and loyalty data classification.",
+        "tags": [
+            {"category": "Privacy", "key": "personal_data_category", "values": "identifier, behavioral, transactional, preference, sensitive", "scopes": ["column", "table"], "type": "governed", "creates": "Central governance", "assigns": "Stewards / service principals", "automation": "Auto-detect candidates", "owner": "Privacy Engineering", "desc": "CCPA/GDPR personal data category for right-to-delete and consent scoping."},
+            {"category": "Consent", "key": "consent_basis", "values": "explicit_consent, legitimate_interest, contractual, legal_obligation", "scopes": ["table", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Governance team / owners", "automation": "Manual + propagation", "owner": "Legal / Privacy", "desc": "GDPR lawful basis for processing this data."},
+            {"category": "Data Subject", "key": "data_subject_type", "values": "customer, prospect, employee, partner, minor", "scopes": ["table"], "type": "governed", "creates": "Central governance", "assigns": "Practitioners / team leads", "automation": "Manual", "owner": "Data Governance", "desc": "Type of data subject — drives retention and deletion SLAs."},
+            {"category": "Geo / Residency", "key": "data_residency", "values": "us, eu, uk, apac, global", "scopes": ["catalog", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Service principals / admins", "automation": "Propagation only", "owner": "Infrastructure", "desc": "Geographic residency requirement for cross-border transfer compliance."},
+            {"category": "Loyalty / Marketing", "key": "marketing_use", "values": "allowed, opt_out, suppressed", "scopes": ["table", "column"], "type": "governed", "creates": "Domain leads", "assigns": "Practitioners / team leads", "automation": "Audit & review candidates", "owner": "Marketing Ops", "desc": "Whether this data is cleared for marketing use per consent records."},
+        ],
+    },
+    "technology": {
+        "label": "Technology / SaaS (SOC2 / ISO 27001)",
+        "description": "Multi-tenant isolation, environment tagging, service ownership, and SOC2 control mapping.",
+        "tags": [
+            {"category": "Tenant Isolation", "key": "tenant_scope", "values": "single_tenant, multi_tenant, internal_only, shared_service", "scopes": ["schema", "table"], "type": "governed", "creates": "Central governance", "assigns": "Service principals / admins", "automation": "Manual + propagation", "owner": "Platform Engineering", "desc": "Tenant isolation level — drives access control and data segregation policies."},
+            {"category": "Environment", "key": "environment", "values": "production, staging, development, sandbox", "scopes": ["catalog", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Practitioners", "automation": "Propagation only", "owner": "Platform Engineering", "desc": "Deployment environment — production data gets stricter controls."},
+            {"category": "Service Ownership", "key": "owning_service", "values": "", "scopes": ["schema", "table"], "type": "governed", "creates": "Central governance", "assigns": "Practitioners / team leads", "automation": "Manual", "owner": "Engineering Management", "desc": "Microservice or team that owns this data product."},
+            {"category": "SOC2 Control", "key": "soc2_criteria", "values": "cc6_access, cc7_operations, cc8_change_mgmt, pi1_privacy", "scopes": ["table", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Governance team only", "automation": "AMM surfaces candidates", "owner": "Security & Compliance", "desc": "SOC2 Trust Services Criteria relevant to this asset."},
+            {"category": "Data Tier", "key": "data_tier", "values": "raw, bronze, silver, gold, platinum", "scopes": ["schema", "table"], "type": "governed", "creates": "Domain leads", "assigns": "Practitioners", "automation": "Manual", "owner": "Data Engineering", "desc": "Medallion architecture tier — signals quality and readiness for consumption."},
+        ],
+    },
+    "government": {
+        "label": "Government / Public Sector (FedRAMP / FISMA)",
+        "description": "FISMA impact levels, CUI marking, FOIA exemptions, and records management.",
+        "tags": [
+            {"category": "FISMA Impact", "key": "fisma_impact", "values": "low, moderate, high", "scopes": ["catalog", "schema", "table"], "type": "governed", "creates": "Central governance", "assigns": "Governance team only", "automation": "Manual + propagation", "owner": "ISSO", "desc": "FISMA security categorization (FIPS 199) — drives control baseline selection."},
+            {"category": "CUI Marking", "key": "cui_category", "values": "cui_basic, cui_specified, not_cui", "scopes": ["table", "column"], "type": "governed", "creates": "Central governance", "assigns": "Stewards / service principals", "automation": "Audit & review candidates", "owner": "Records Officer", "desc": "Controlled Unclassified Information marking per NIST 800-171."},
+            {"category": "FOIA", "key": "foia_exempt", "values": "yes, no, partial", "scopes": ["table"], "type": "governed", "creates": "Central governance", "assigns": "Governance team / owners", "automation": "Manual", "owner": "Legal / FOIA Office", "desc": "FOIA exemption status for public records requests."},
+            {"category": "Records Retention", "key": "nara_schedule", "values": "", "scopes": ["table", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Governance team only", "automation": "Manual", "owner": "Records Management", "desc": "NARA records schedule code for disposition."},
+        ],
+    },
+    "universal": {
+        "label": "Universal Governance Foundation",
+        "description": "Core tags every organization needs regardless of industry: classification, ownership, domain, lifecycle, and cost.",
+        "tags": [
+            {"category": "Classification / Sensitivity", "key": "sensitivity_level", "values": "public, internal, confidential, restricted", "scopes": ["table", "view"], "type": "governed", "creates": "Central governance", "assigns": "Stewards / service principals", "automation": "Audit & review candidates", "owner": "Data Governance Council", "desc": "Overall data sensitivity. Primary signal for access control policies and ABAC."},
+            {"category": "PII Classification", "key": "pii", "values": "ssn, email, phone, name, dob, address, ip_address", "scopes": ["column"], "type": "governed", "creates": "Central governance", "assigns": "Automation / stewards", "automation": "Auto-detect candidates", "owner": "Privacy Team", "desc": "Column-level PII type. Drives column masking and right-to-delete workflows."},
+            {"category": "Domain", "key": "domain", "values": "finance, sales, marketing, engineering, hr, product, legal, operations", "scopes": ["catalog", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Practitioners / team leads", "automation": "Manual", "owner": "Data Governance Council", "desc": "Business domain for discovery, routing, and federated governance boundaries."},
+            {"category": "Certification", "key": "certification_status", "values": "certified, under_review, deprecated", "scopes": ["table", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Governance team only", "automation": "AMM surfaces candidates", "owner": "Data Governance Council", "desc": "Signals validated source of truth. Deprecated assets get surfaced for cleanup."},
+            {"category": "Cost Attribution", "key": "cost_center", "values": "", "scopes": ["catalog", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Team leads / finance ops", "automation": "Manual", "owner": "Finance", "desc": "Ties assets to cost centers for chargeback and FinOps reporting."},
+            {"category": "Ownership", "key": "data_owner", "values": "", "scopes": ["schema", "table"], "type": "governed", "creates": "Central governance", "assigns": "Practitioners / team leads", "automation": "Manual", "owner": "Data Governance Council", "desc": "Accountable individual or team for data quality and access decisions."},
+            {"category": "Lifecycle", "key": "lifecycle_stage", "values": "active, deprecated, archived, sunset", "scopes": ["table", "view", "schema"], "type": "governed", "creates": "Central governance", "assigns": "Governance team / owners", "automation": "AMM surfaces candidates", "owner": "Data Governance Council", "desc": "Asset health state. Drives discovery ranking and cleanup automation."},
+        ],
+    },
+}
+
+
+def get_pattern_names():
+    """Return list of (key, label) tuples for the governance patterns library."""
+    return [(k, v["label"]) for k, v in GOVERNANCE_PATTERNS.items()]
+
+
+def get_pattern_tags(pattern_key):
+    """Return the tag definitions for a governance pattern, formatted as Tag Matrix rows."""
+    pattern = GOVERNANCE_PATTERNS.get(pattern_key)
+    if not pattern:
+        return []
+    rows = []
+    for tag in pattern["tags"]:
+        scope_flags = {f"scope_{s}": (s in tag.get("scopes", [])) for s in _TAXONOMY_VALID_SCOPES}
+        rows.append({
+            "category": tag["category"],
+            "desc": tag["desc"],
+            "type": tag["type"],
+            "key": tag["key"],
+            "values": tag["values"],
+            **scope_flags,
+            "creates": tag["creates"],
+            "assigns": tag["assigns"],
+            "automation": tag["automation"],
+            "owner": tag["owner"],
+        })
+    return rows
+
+
+def match_patterns_to_prompt(user_prompt):
+    """Given a user's plain-language governance description, identify which patterns apply.
+    Returns list of pattern keys sorted by relevance score."""
+    prompt_lower = (user_prompt or "").lower()
+    scores = {}
+    keyword_map = {
+        "healthcare": ["hipaa", "phi", "healthcare", "hospital", "patient", "clinical", "medical", "ehr", "emr", "life science", "pharma"],
+        "financial_services": ["sox", "pci", "financial", "banking", "payment", "credit card", "cardholder", "basel", "trading", "finserv", "insurance", "loan"],
+        "retail_ecommerce": ["retail", "ecommerce", "e-commerce", "consumer", "gdpr", "ccpa", "loyalty", "customer", "marketing", "consent", "shopping"],
+        "technology": ["saas", "soc2", "soc 2", "iso 27001", "multi-tenant", "multitenant", "api", "microservice", "platform", "startup", "software"],
+        "government": ["government", "fedramp", "fisma", "federal", "agency", "cui", "foia", "nist", "public sector", "dod", "military"],
+        "universal": ["general", "basic", "foundation", "start", "getting started", "best practice", "standard"],
+    }
+    for pattern_key, keywords in keyword_map.items():
+        score = sum(1 for kw in keywords if kw in prompt_lower)
+        if score > 0:
+            scores[pattern_key] = score
+    # Always include universal as a fallback with low priority
+    if "universal" not in scores:
+        scores["universal"] = 0.1
+    return sorted(scores.keys(), key=lambda k: scores[k], reverse=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Freeform → Governed analysis
+# ─────────────────────────────────────────────────────────────────────────
+
+def analyze_freeform_tags(live_tag_records, taxonomy_rows):
+    """Analyze live tags from information_schema and identify freeform tags that should be governed.
+
+    live_tag_records: list of dicts with tag_name, tag_value, scope (catalog/schema/table/column),
+                      and object_id.
+    taxonomy_rows: current Tag Matrix rows.
+
+    Returns a list of dicts: {key, usage_count, unique_values, objects, recommendation, rationale, priority}
+    """
+    taxonomy_keys = set()
+    for row in (taxonomy_rows or []):
+        k = (row.get("key") or "").strip()
+        if k and _norm(row.get("type", "")) == "governed":
+            taxonomy_keys.add(_norm(k))
+
+    # Aggregate live tags not in the governed taxonomy
+    freeform_agg = {}
+    for rec in live_tag_records:
+        tag_name = (rec.get("tag_name") or "").strip()
+        if not tag_name or _norm(tag_name) in taxonomy_keys:
+            continue
+        nk = _norm(tag_name)
+        if nk not in freeform_agg:
+            freeform_agg[nk] = {
+                "key": tag_name,
+                "values": set(),
+                "objects": set(),
+                "scopes": set(),
+            }
+        freeform_agg[nk]["values"].add(rec.get("tag_value") or "")
+        freeform_agg[nk]["objects"].add(rec.get("object_id") or "")
+        freeform_agg[nk]["scopes"].add(rec.get("scope") or "")
+
+    results = []
+    for nk, info in freeform_agg.items():
+        usage_count = len(info["objects"])
+        unique_values = sorted(info["values"] - {""})
+        mode, rationale = recommend_governance_mode(info["key"], required=False, category="")
+
+        # Determine priority based on signals
+        priority = "low"
+        if mode == "governed":
+            priority = "high"
+        elif usage_count >= 5:
+            priority = "medium"
+        elif len(unique_values) <= 5 and usage_count >= 3:
+            priority = "medium"
+
+        # Enhanced rationale for migration
+        migration_rationale = rationale
+        if usage_count >= 10:
+            migration_rationale += f" High adoption ({usage_count} objects) suggests org-wide relevance."
+        if len(unique_values) <= 5 and unique_values:
+            migration_rationale += f" Bounded value set ({', '.join(unique_values[:5])}) is a good fit for governed enumeration."
+        elif len(unique_values) > 20:
+            migration_rationale += f" High cardinality ({len(unique_values)} distinct values) — may be better as metadata than a governed tag."
+
+        results.append({
+            "key": info["key"],
+            "usage_count": usage_count,
+            "unique_values": unique_values[:10],  # cap display
+            "total_unique_values": len(unique_values),
+            "objects_sample": sorted(info["objects"])[:5],
+            "scopes": sorted(info["scopes"] - {""}),
+            "recommendation": mode,
+            "rationale": migration_rationale,
+            "priority": priority,
+        })
+
+    # Sort by priority (high first), then by usage count
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    results.sort(key=lambda r: (priority_order.get(r["priority"], 3), -r["usage_count"]))
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# DAB Bundle generation
+# ─────────────────────────────────────────────────────────────────────────
+
+def generate_dab_bundle(sql_content, catalog="", schema="", table="", job_name="tag-strategy-apply"):
+    """Generate a Declarative Automation Bundle (DAB) structure for deploying tag SQL as a job.
+
+    Returns a dict of {filename: content} for the bundle files.
+    """
+    import yaml
+
+    bundle_yaml = {
+        "bundle": {
+            "name": job_name,
+        },
+        "resources": {
+            "jobs": {
+                job_name: {
+                    "name": f"[Tag Strategy] Apply tags - {catalog or 'catalog'}.{schema or 'schema'}",
+                    "description": "Auto-generated by UC Tag Strategy Builder. Applies governed tags per the approved taxonomy.",
+                    "schedule": {
+                        "quartz_cron_expression": "0 0 6 * * ?",
+                        "timezone_id": "UTC",
+                    },
+                    "tasks": [
+                        {
+                            "task_key": "apply_tags",
+                            "sql_task": {
+                                "query": {
+                                    "source": "WORKSPACE",
+                                },
+                                "warehouse_id": "${var.warehouse_id}",
+                                "file": {
+                                    "path": "./src/apply_tags.sql",
+                                },
+                            },
+                        }
+                    ],
+                    "tags": {
+                        "managed_by": "tag-strategy-builder",
+                        "catalog": catalog or "unspecified",
+                    },
+                }
+            }
+        },
+        "variables": {
+            "warehouse_id": {
+                "description": "SQL warehouse ID to execute the tag statements",
+                "default": "",
+            },
+        },
+        "targets": {
+            "dev": {
+                "mode": "development",
+                "default": True,
+            },
+            "prod": {
+                "mode": "production",
+                "run_as": {
+                    "service_principal_name": "${var.sp_name}",
+                },
+            },
+        },
+    }
+
+    # Generate the files dict
+    try:
+        bundle_content = yaml.dump(bundle_yaml, default_flow_style=False, sort_keys=False)
+    except Exception:
+        # Fallback to manual YAML if yaml module not available
+        bundle_content = _manual_yaml_bundle(bundle_yaml, job_name, catalog, schema)
+
+    files = {
+        "databricks.yml": bundle_content,
+        "src/apply_tags.sql": sql_content,
+        "README.md": f"""# Tag Strategy Bundle: {job_name}
+
+Auto-generated by the UC Tag Strategy Builder.
+
+## Deploy
+
+```bash
+# Install the Databricks CLI if you haven't already
+pip install databricks-cli
+
+# Configure your workspace
+databricks configure
+
+# Deploy the bundle
+databricks bundle deploy --target dev
+
+# Run the job
+databricks bundle run {job_name} --target dev
+```
+
+## What this does
+
+This bundle creates a scheduled Lakeflow Job that applies your governed tag taxonomy to:
+- Catalog: `{catalog or '<catalog>'}`
+- Schema: `{schema or '<schema>'}`
+- Table: `{table or '<table>'}`
+
+The job runs daily at 06:00 UTC by default. Edit `databricks.yml` to change the schedule.
+
+## Variables
+
+| Variable | Description |
+|----------|-------------|
+| `warehouse_id` | SQL warehouse to execute statements |
+| `sp_name` | Service principal for production runs |
+
+Set variables in your target config or via `--var` flag:
+```bash
+databricks bundle deploy --target prod --var="warehouse_id=abc123,sp_name=my-sp"
+```
+""",
+    }
+    return files
+
+
+def _manual_yaml_bundle(bundle_yaml, job_name, catalog, schema):
+    """Fallback YAML generation without PyYAML."""
+    return f"""bundle:
+  name: {job_name}
+
+resources:
+  jobs:
+    {job_name}:
+      name: "[Tag Strategy] Apply tags - {catalog or 'catalog'}.{schema or 'schema'}"
+      description: "Auto-generated by UC Tag Strategy Builder. Applies governed tags per the approved taxonomy."
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: "UTC"
+      tasks:
+        - task_key: apply_tags
+          sql_task:
+            warehouse_id: ${{var.warehouse_id}}
+            file:
+              path: "./src/apply_tags.sql"
+      tags:
+        managed_by: tag-strategy-builder
+        catalog: {catalog or 'unspecified'}
+
+variables:
+  warehouse_id:
+    description: "SQL warehouse ID to execute the tag statements"
+    default: ""
+  sp_name:
+    description: "Service principal name for production target"
+    default: ""
+
+targets:
+  dev:
+    mode: development
+    default: true
+  prod:
+    mode: production
+    run_as:
+      service_principal_name: ${{var.sp_name}}
+"""
 
 
 def suggest_abac_candidates(rows):

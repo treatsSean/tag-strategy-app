@@ -1849,8 +1849,8 @@ def _render_tab_apply():
                 st.caption("Select at least one tag above to preview the SQL before applying.")
 
 def _render_tab_report():
-    st.markdown("#### Tag report")
-    st.caption("Live tags currently applied in Unity Catalog, scoped to the Catalog / Schema / Table selected in the sidebar.")
+    st.markdown("#### Tag Report Dashboard")
+    st.caption("Live tag inventory across Unity Catalog — scoped to the Catalog / Schema / Table selected in the sidebar.")
     cat = st.session_state.target_catalog
     sch = st.session_state.target_schema
     tbl = st.session_state.target_table
@@ -1860,63 +1860,215 @@ def _render_tab_report():
         st.info("Select at least a catalog in the sidebar to run a tag report.")
     else:
         scope_label = ".".join(filter(None, [cat, sch, tbl]))
-        st.markdown(f"**Scope:** `{scope_label}`")
-        if st.button("Refresh report"):
-            get_catalog_tags_report.clear()
-            get_schema_tags_report.clear()
-            get_table_tags_report.clear()
-            get_column_tags_report.clear()
-            st.rerun()
 
+        # Header bar with scope and refresh
+        hdr1, hdr2 = st.columns([4, 1])
+        with hdr1:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #0B2026 0%, #1a3a42 100%); padding: 16px 20px;
+                        border-radius: 8px; margin-bottom: 16px;">
+                <span style="color: #F9F7F4; font-size: 14px; font-weight: 500;">SCOPE</span><br/>
+                <span style="color: #FF3621; font-size: 20px; font-weight: 700; font-family: 'DM Mono', monospace;">{scope_label}</span>
+            </div>
+            """, unsafe_allow_html=True)
+        with hdr2:
+            if st.button("↻ Refresh", type="primary", use_container_width=True, key="report_refresh_btn"):
+                get_catalog_tags_report.clear()
+                get_schema_tags_report.clear()
+                get_table_tags_report.clear()
+                get_column_tags_report.clear()
+                st.rerun()
+
+        # Gather all tag data
         report_frames = []
-
         cat_tags_df = get_catalog_tags_report(w, cat, user_key)
-        st.markdown(f"##### Catalog-level tags — `{cat}`")
-        if cat_tags_df.empty:
-            st.caption("No catalog-level tags found.")
-        else:
-            st.dataframe(cat_tags_df, use_container_width=True, hide_index=True)
+        if not cat_tags_df.empty:
             tagged = cat_tags_df.copy()
             tagged["level"] = "catalog"
+            tagged["object"] = cat
             report_frames.append(tagged)
 
+        sch_tags_df = pd.DataFrame()
+        tbl_tags_df = pd.DataFrame()
+        col_tags_df = pd.DataFrame()
         if sch:
             sch_tags_df = get_schema_tags_report(w, cat, sch, user_key)
-            st.markdown(f"##### Schema-level tags — `{cat}.{sch}`")
-            if sch_tags_df.empty:
-                st.caption("No schema-level tags found.")
-            else:
-                st.dataframe(sch_tags_df, use_container_width=True, hide_index=True)
+            if not sch_tags_df.empty:
                 tagged = sch_tags_df.copy()
                 tagged["level"] = "schema"
+                tagged["object"] = tagged.get("schema_name", sch)
                 report_frames.append(tagged)
 
             tbl_tags_df = get_table_tags_report(w, cat, sch, tbl, user_key)
-            table_scope = f"{cat}.{sch}.{tbl}" if tbl else f"{cat}.{sch} (all tables)"
-            st.markdown(f"##### Table-level tags — `{table_scope}`")
-            if tbl_tags_df.empty:
-                st.caption("No table-level tags found.")
-            else:
-                st.dataframe(tbl_tags_df, use_container_width=True, hide_index=True)
+            if not tbl_tags_df.empty:
                 tagged = tbl_tags_df.copy()
                 tagged["level"] = "table"
+                tagged["object"] = tagged.apply(lambda r: f"{r.get('schema_name', '')}.{r.get('table_name', '')}", axis=1)
                 report_frames.append(tagged)
 
             col_tags_df = get_column_tags_report(w, cat, sch, tbl, user_key)
-            st.markdown(f"##### Column-level tags — `{table_scope}`")
-            if col_tags_df.empty:
-                st.caption("No column-level tags found.")
-            else:
-                st.dataframe(col_tags_df, use_container_width=True, hide_index=True)
+            if not col_tags_df.empty:
                 tagged = col_tags_df.copy()
                 tagged["level"] = "column"
+                tagged["object"] = tagged.apply(lambda r: f"{r.get('table_name', '')}.{r.get('column_name', '')}", axis=1)
                 report_frames.append(tagged)
-        else:
-            st.caption("Select a schema in the sidebar to include schema, table, and column-level tags in the report.")
 
-        if report_frames:
-            report_df = pd.concat(report_frames, ignore_index=True)
-            st.download_button("Download report as CSV", report_df.to_csv(index=False), file_name="tag_report.csv", mime="text/csv")
+        if not report_frames:
+            st.warning("No tags found in the selected scope. Tags may not be applied yet, or you may not have permission to read them.")
+            return
+
+        report_df = pd.concat(report_frames, ignore_index=True)
+        total_tags = len(report_df)
+        unique_keys = report_df["tag_name"].nunique()
+
+        # ─── Summary Metrics Row ───
+        st.markdown("##### Overview")
+        m1, m2, m3, m4 = st.columns(4)
+        level_counts = report_df["level"].value_counts()
+        m1.metric("Total Tag Assignments", total_tags)
+        m2.metric("Unique Tag Keys", unique_keys)
+        m3.metric("Levels Covered", f"{len(level_counts)}/4")
+        m4.metric("Objects Tagged", report_df["object"].nunique())
+
+        # ─── Distribution by Level (horizontal stacked bar) ───
+        st.markdown("---")
+        st.markdown("##### Tag Distribution by Level")
+
+        level_order = ["catalog", "schema", "table", "column"]
+        level_icons = {"📦 Catalog": level_counts.get("catalog", 0), "🗂️ Schema": level_counts.get("schema", 0),
+                       "📊 Table": level_counts.get("table", 0), "🔤 Column": level_counts.get("column", 0)}
+
+        # Visual bar using HTML
+        bar_total = max(sum(level_icons.values()), 1)
+        colors = {"Catalog": "#FF3621", "Schema": "#FF8C42", "Table": "#0B2026", "Column": "#4A90A4"}
+        bar_html = '<div style="display: flex; height: 36px; border-radius: 6px; overflow: hidden; margin-bottom: 8px;">'
+        for (label, count), color in zip(level_icons.items(), colors.values()):
+            if count > 0:
+                pct = count / bar_total * 100
+                bar_html += f'<div style="width: {pct}%; background: {color}; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: 600;">{label.split(" ")[-1]} ({count})</div>'
+        bar_html += '</div>'
+        st.markdown(bar_html, unsafe_allow_html=True)
+
+        # Level detail cards
+        level_cols = st.columns(4)
+        for i, (level_name, icon, color) in enumerate([
+            ("catalog", "📦", "#FF3621"), ("schema", "🗂️", "#FF8C42"),
+            ("table", "📊", "#0B2026"), ("column", "🔤", "#4A90A4")
+        ]):
+            count = level_counts.get(level_name, 0)
+            with level_cols[i]:
+                st.markdown(f"""
+                <div style="background: {color}10; border-left: 4px solid {color}; padding: 12px; border-radius: 4px; text-align: center;">
+                    <div style="font-size: 24px;">{icon}</div>
+                    <div style="font-size: 28px; font-weight: 700; color: {color};">{count}</div>
+                    <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7;">{level_name}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        # ─── Tag Key Frequency Chart ───
+        st.markdown("---")
+        st.markdown("##### Most Common Tag Keys")
+        key_freq = report_df["tag_name"].value_counts().head(12).reset_index()
+        key_freq.columns = ["Tag Key", "Occurrences"]
+        st.bar_chart(key_freq, x="Tag Key", y="Occurrences")
+
+        # ─── Tag Value Distribution (for top keys) ───
+        st.markdown("---")
+        st.markdown("##### Tag Values Breakdown")
+        st.caption("Value distribution for the most-used tag keys.")
+
+        top_keys = report_df["tag_name"].value_counts().head(6).index.tolist()
+        if top_keys:
+            val_cols = st.columns(min(3, len(top_keys)))
+            for i, key_name in enumerate(top_keys[:6]):
+                col_idx = i % 3
+                key_subset = report_df[report_df["tag_name"] == key_name]
+                value_dist = key_subset["tag_value"].value_counts().head(8)
+                with val_cols[col_idx]:
+                    st.markdown(f"**`{key_name}`**")
+                    if not value_dist.empty:
+                        # Mini bar visualization per value
+                        max_count = value_dist.max()
+                        for val, cnt in value_dist.items():
+                            bar_width = int(cnt / max(max_count, 1) * 100)
+                            display_val = str(val)[:20] if val else "(empty)"
+                            st.markdown(f"""
+                            <div style="margin-bottom: 4px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <div style="min-width: 80px; font-size: 11px; font-family: 'DM Mono', monospace; text-align: right;">{display_val}</div>
+                                    <div style="flex: 1; background: #EEEDE9; border-radius: 3px; height: 16px;">
+                                        <div style="width: {bar_width}%; background: #FF3621; height: 100%; border-radius: 3px; display: flex; align-items: center; justify-content: flex-end; padding-right: 4px;">
+                                            <span style="font-size: 10px; color: white; font-weight: 600;">{cnt}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        st.caption("No values")
+                    st.markdown("")
+
+        # ─── Tag Key × Level Matrix ───
+        st.markdown("---")
+        st.markdown("##### Tag Key × Level Matrix")
+        st.caption("Which tag keys appear at which levels. Helps identify scope inconsistencies.")
+
+        matrix_data = report_df.groupby(["tag_name", "level"]).size().reset_index(name="count")
+        if not matrix_data.empty:
+            pivot = matrix_data.pivot_table(index="tag_name", columns="level", values="count", fill_value=0)
+            # Reorder columns
+            for col in level_order:
+                if col not in pivot.columns:
+                    pivot[col] = 0
+            pivot = pivot[[c for c in level_order if c in pivot.columns]]
+
+            # Style with emoji indicators
+            styled_pivot = pivot.copy()
+            for col in styled_pivot.columns:
+                styled_pivot[col] = styled_pivot[col].apply(lambda v: f"✅ {v}" if v > 0 else "—")
+            st.dataframe(styled_pivot, use_container_width=True)
+
+        # ─── Detailed Data (collapsible) ───
+        st.markdown("---")
+        st.markdown("##### Detailed Tag Data")
+        report_view_mode = st.radio("View", ["By level", "All tags", "By tag key"], horizontal=True, key="report_view_mode")
+
+        if report_view_mode == "All tags":
+            display_cols = [c for c in ["level", "object", "tag_name", "tag_value"] if c in report_df.columns]
+            st.dataframe(
+                report_df[display_cols].sort_values(["level", "tag_name"]),
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "level": st.column_config.TextColumn("Level", width="small"),
+                    "object": st.column_config.TextColumn("Object", width="medium"),
+                    "tag_name": st.column_config.TextColumn("Tag Key", width="medium"),
+                    "tag_value": st.column_config.TextColumn("Value", width="medium"),
+                },
+            )
+        elif report_view_mode == "By level":
+            for level_name in level_order:
+                level_df = report_df[report_df["level"] == level_name]
+                if level_df.empty:
+                    continue
+                with st.expander(f"{level_name.title()} tags ({len(level_df)})", expanded=(level_name == "table")):
+                    display_cols = [c for c in ["object", "tag_name", "tag_value"] if c in level_df.columns]
+                    st.dataframe(level_df[display_cols], use_container_width=True, hide_index=True)
+        else:  # By tag key
+            for key_name in sorted(report_df["tag_name"].unique()):
+                key_df = report_df[report_df["tag_name"] == key_name]
+                with st.expander(f"`{key_name}` ({len(key_df)} assignments)"):
+                    display_cols = [c for c in ["level", "object", "tag_value"] if c in key_df.columns]
+                    st.dataframe(key_df[display_cols], use_container_width=True, hide_index=True)
+
+        # ─── Download ───
+        st.markdown("---")
+        dl1, dl2, dl3 = st.columns([1, 1, 3])
+        with dl1:
+            st.download_button("⬇ Download CSV", report_df.to_csv(index=False), file_name="tag_report.csv", mime="text/csv", type="primary", use_container_width=True)
+        with dl2:
+            # JSON export
+            json_export = report_df.to_json(orient="records", indent=2)
+            st.download_button("⬇ Download JSON", json_export, file_name="tag_report.json", mime="application/json", use_container_width=True)
 
 
 @safe_render

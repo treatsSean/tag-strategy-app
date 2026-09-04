@@ -1068,6 +1068,7 @@ def _render_tab_strategy():
         st.session_state.strategy_suggestions = get_pattern_tags(pkey)
         st.session_state.strategy_suggestion_source = f"pattern:{pkey}"
         st.session_state.strategy_nonce += 1
+        print(f"DEBUG: Pattern clicked: {pkey}, nonce now: {st.session_state.strategy_nonce}")
 
     for i, (pkey, plabel) in enumerate(pattern_names):
         col_idx = i % 3
@@ -2545,13 +2546,20 @@ _tab_labels = [_label for _label, _ in _section_items]
 # Use unique key based on section
 _tab_key = f"section_tabs_{_active_section}"
 
+print(f"DEBUG: Rendering tabs for section '{_active_section}', tab_key='{_tab_key}', labels={_tab_labels}")
+
 # Create tabs - use direct dict lookup to ensure consistent tab order
 _section_tab_objs = st.tabs(_tab_labels, key=_tab_key)
 
+print(f"DEBUG: Tabs created, num_tab_objs={len(_section_tab_objs)}")
+
 # Render each tab
-for _tab_obj, (_label, _render_fn) in zip(_section_tab_objs, _section_items):
+for _tab_idx, (_tab_obj, (_label, _render_fn)) in enumerate(zip(_section_tab_objs, _section_items)):
+    print(f"DEBUG: Rendering tab {_tab_idx}: {_label}")
     with _tab_obj:
         _render_fn()
+
+print(f"DEBUG: All tabs rendered")
 
 st.divider()
 st.markdown(

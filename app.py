@@ -1063,13 +1063,16 @@ def _render_tab_strategy():
     st.caption("Select a curated pattern to pre-fill proven governance tags for your industry, or describe your needs below.")
     pattern_names = get_pattern_names()
     pattern_cols = st.columns(min(len(pattern_names), 3))
+
+    def _on_pattern_click(pkey):
+        st.session_state.strategy_suggestions = get_pattern_tags(pkey)
+        st.session_state.strategy_suggestion_source = f"pattern:{pkey}"
+        st.session_state.strategy_nonce += 1
+
     for i, (pkey, plabel) in enumerate(pattern_names):
         col_idx = i % 3
         with pattern_cols[col_idx]:
-            if st.button(plabel, key=f"pattern_{pkey}", use_container_width=True):
-                st.session_state.strategy_suggestions = get_pattern_tags(pkey)
-                st.session_state.strategy_suggestion_source = f"pattern:{pkey}"
-                st.session_state.strategy_nonce += 1
+            st.button(plabel, key=f"pattern_{pkey}", use_container_width=True, on_click=_on_pattern_click, args=(pkey,))
 
     st.markdown("---")
     st.markdown("##### Or describe your needs in plain language")

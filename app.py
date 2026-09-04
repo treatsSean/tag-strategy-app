@@ -2538,7 +2538,17 @@ _NAV_SECTIONS = {
 
 _active_section = st.session_state.get("nav_section", "Home")
 _section_items = _NAV_SECTIONS.get(_active_section, _NAV_SECTIONS["Home"])
-_section_tab_objs = st.tabs([_label for _label, _ in _section_items], key=f"section_tabs_{_active_section}")
+
+# Get the tab labels in order
+_tab_labels = [_label for _label, _ in _section_items]
+
+# Use unique key based on section
+_tab_key = f"section_tabs_{_active_section}"
+
+# Create tabs - use direct dict lookup to ensure consistent tab order
+_section_tab_objs = st.tabs(_tab_labels, key=_tab_key)
+
+# Render each tab
 for _tab_obj, (_label, _render_fn) in zip(_section_tab_objs, _section_items):
     with _tab_obj:
         _render_fn()

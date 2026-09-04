@@ -2535,7 +2535,7 @@ _NAV_SECTIONS = {
 
 _active_section = st.session_state.get("nav_section", "Home")
 _section_items = _NAV_SECTIONS.get(_active_section, _NAV_SECTIONS["Home"])
-_section_tab_objs = st.tabs([_label for _label, _ in _section_items])
+_section_tab_objs = st.tabs([_label for _label, _ in _section_items], key=f"section_tabs_{_active_section}")
 for _tab_obj, (_label, _render_fn) in zip(_section_tab_objs, _section_items):
     with _tab_obj:
         _render_fn()
